@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# egui is slow to run in a debug build, so give dependencies some optimisation
+# even in dev. Our own crates stay unoptimised so backtraces remain readable.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"

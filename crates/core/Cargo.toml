@@ -1,0 +1,8 @@
+[package]
+name = "cat-paws-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Graph model, compiler and virtual machine for Cat Paws. No UI dependencies."
+
+[dependencies]
