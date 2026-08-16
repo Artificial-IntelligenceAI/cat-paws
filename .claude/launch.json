@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cat-paws-web",
+      "runtimeExecutable": "trunk",
+      "runtimeArgs": ["serve", "--config", "crates/app/Trunk.toml"],
+      "port": 8080
+    }
+  ]
+}
