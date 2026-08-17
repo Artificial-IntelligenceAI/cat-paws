@@ -8,8 +8,10 @@ use crate::app::CatPaws;
 use crate::theme::Palette;
 use cat_paws_core::{Graph, NodeId, NodeKind, PinKind, PinRef, Side};
 use egui::epaint::CubicBezierShape;
+use egui::text::LayoutJob;
 use egui::{
-    pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, Ui, Vec2,
+    pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, TextFormat, Ui,
+    Vec2,
 };
 
 pub const NODE_WIDTH: f32 = 196.0;
@@ -44,6 +46,19 @@ pub fn subtitle_font_px(zoom: f32) -> f32 {
 
 pub fn pin_label_font_px(zoom: f32) -> f32 {
     (PIN_LABEL_PX * zoom).max(MIN_PIN_LABEL_PX)
+}
+
+/// Extra space between subtitle letters, as a fraction of the font size.
+/// Tune here — this is the whole knob.
+pub const SUBTITLE_TRACKING: f32 = 0.10;
+
+/// Subtitle letter spacing in pixels.
+///
+/// Derived from the *rendered* font size rather than raw zoom, so it follows
+/// the size floor: when the font stops shrinking, the tracking stops with it
+/// instead of collapsing to nothing when zoomed out.
+pub fn subtitle_tracking_px(zoom: f32) -> f32 {
+    subtitle_font_px(zoom) * SUBTITLE_TRACKING
 }
 
 /// Whether the header still has room for the subtitle beneath a floored title.
@@ -153,11 +168,16 @@ fn draw_wire(painter: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
     ));
 }
 
-/// Draws text with extra stroke weight.
+/// Draws text with extra stroke weight and letter spacing.
 ///
 /// egui's bundled fonts ship no bold face, so weight is faked by painting the
 /// same string a fraction of a pixel apart. At these sizes the offsets land
 /// inside the antialiasing and read as a heavier stroke rather than a blur.
+/// That added weight closes up the gaps between letters, which is why this also
+/// takes `tracking` to open them back out.
+///
+/// The string is laid out once and painted several times, so the extra passes
+/// cost drawing but not text shaping.
 fn text_semibold(
     painter: &Painter,
     pos: Pos2,
@@ -165,9 +185,23 @@ fn text_semibold(
     text: &str,
     font: FontId,
     color: Color32,
+    tracking: f32,
 ) {
+    let mut job = LayoutJob::default();
+    job.append(
+        text,
+        0.0,
+        TextFormat {
+            font_id: font,
+            color,
+            extra_letter_spacing: tracking,
+            ..Default::default()
+        },
+    );
+    let galley = painter.layout_job(job);
+    let origin = anchor.anchor_size(pos, galley.size()).min;
     for offset in [vec2(0.0, 0.0), vec2(0.5, 0.0), vec2(0.0, 0.35)] {
-        painter.text(pos + offset, anchor, text, font.clone(), color);
+        painter.galley(origin + offset, galley.clone(), color);
     }
 }
 
@@ -593,6 +627,7 @@ impl CatPaws {
                     // Barely dimmed now that it carries weight -- a heavier
                     // stroke plus a strong fade just looks muddy.
                     palette.on_category().gamma_multiply(0.94),
+                    subtitle_tracking_px(zoom),
                 );
             } else {
                 // No room for both, so the title takes the whole header.
@@ -864,5 +899,23 @@ mod tests {
             }
         }
         assert!(pin_labels_fit(1.0), "pin labels should show at 100%");
+    }
+
+    /// Tracking follows the rendered font size, so when the font hits its floor
+    /// the letter spacing holds too instead of collapsing when zoomed out.
+    #[test]
+    fn subtitle_tracking_survives_zooming_out() {
+        for zoom in [0.35_f32, 0.4, 0.5, 0.75, 1.0, 2.5] {
+            let tracking = subtitle_tracking_px(zoom);
+            assert!(
+                tracking > 0.5,
+                "tracking {tracking} at zoom {zoom} is too small to see"
+            );
+            assert_eq!(tracking, subtitle_font_px(zoom) * SUBTITLE_TRACKING);
+        }
+        // Zoomed right out the font is floored, so the tracking is floored too.
+        assert_eq!(subtitle_tracking_px(0.35), subtitle_tracking_px(0.1));
+        // Zoomed in it grows with the text.
+        assert!(subtitle_tracking_px(2.5) > subtitle_tracking_px(1.0));
     }
 }
