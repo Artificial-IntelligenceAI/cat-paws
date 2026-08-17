@@ -28,6 +28,17 @@ The two toolbar buttons are deliberately separate:
 Compiling is not just validation — it produces a real program. Tick
 *Show compiled code* to see the instructions the hammer generated.
 
+## Memory
+
+A program allocates nothing while it runs: numbers live in WebAssembly locals and every
+string is a literal written into the module up front. So there is no allocator and nothing
+can leak, because nothing can be allocated.
+
+That changes the moment a value can be built whose size is not known until it runs — string
+concatenation, or lists. The plan from there is a mark-sweep collector of our own, and the
+two decisions that have to come first are written down in
+[docs/memory.md](docs/memory.md).
+
 ## Running it
 
 In the browser:
