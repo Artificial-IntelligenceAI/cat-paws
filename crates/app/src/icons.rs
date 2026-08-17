@@ -12,6 +12,8 @@ pub enum Icon {
     Hammer,
     /// Compile and run.
     Play,
+    /// Undo the last change.
+    Undo,
 }
 
 /// Draws the icon centred in `rect`.
@@ -48,6 +50,36 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 Stroke::NONE,
             ));
         }
+        Icon::Undo => {
+            // An arc over the top, with an arrowhead dropping off the left end.
+            let r = s * 0.30;
+            let steps = 24;
+            let a0 = 15.0_f32.to_radians();
+            let a1 = 168.0_f32.to_radians();
+            let arc: Vec<Pos2> = (0..=steps)
+                .map(|i| {
+                    let a = a0 + (a1 - a0) * (i as f32 / steps as f32);
+                    // Screen y grows downward, so the sine is negated.
+                    c + vec2(a.cos() * r, -a.sin() * r * 0.92)
+                })
+                .collect();
+            let tip = *arc.last().expect("arc is never empty");
+            painter.add(egui::Shape::line(
+                arc,
+                Stroke::new((s * 0.11).max(1.4), color),
+            ));
+
+            let w = s * 0.16;
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    tip + vec2(0.0, w * 1.25),
+                    tip + vec2(-w, -w * 0.3),
+                    tip + vec2(w, -w * 0.3),
+                ],
+                color,
+                Stroke::NONE,
+            ));
+        }
         Icon::Play => {
             let r = s * 0.34;
             let triangle = vec![
@@ -72,7 +104,7 @@ pub fn icon_button(
     fill: Color32,
     fg: Color32,
 ) -> Response {
-    let font = FontId::proportional(13.0);
+    let font = FontId::proportional(14.0);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, fg);
 
     let icon_size = 16.0;

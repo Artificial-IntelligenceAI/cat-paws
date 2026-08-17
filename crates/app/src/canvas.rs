@@ -251,6 +251,7 @@ impl CatPaws {
                 // Alt-click a pin to cut every wire attached to it.
                 if alt {
                     if let Some(pin) = self.pin_at(rect, p) {
+                        self.push_undo();
                         self.graph.disconnect_pin(pin);
                         self.mark_stale();
                         return;
@@ -267,6 +268,9 @@ impl CatPaws {
                         Interaction::DragWire { origin: pin }
                     } else if let Some(id) = self.node_at(rect, p) {
                         self.selected = Some(id);
+                        // Snapshot once, at the start of the move -- not on every
+                        // frame the node is dragged across.
+                        self.push_undo();
                         let node_pos = self.graph.node(id).map(|n| n.pos).unwrap_or((0.0, 0.0));
                         let world = self.view.to_world(rect, p);
                         Interaction::DragNode {
@@ -311,8 +315,14 @@ impl CatPaws {
                             return;
                         }
                     };
+                    // Only record an undo step if the wire is actually accepted;
+                    // a refused connection changed nothing to undo.
+                    let before = self.graph.clone();
                     match self.graph.connect(from, to) {
-                        Ok(()) => self.mark_stale(),
+                        Ok(()) => {
+                            self.remember(before);
+                            self.mark_stale();
+                        }
                         Err(_) => {
                             let message = self.describe_refusal(from, to);
                             self.set_wire_error(&message);
@@ -323,8 +333,14 @@ impl CatPaws {
             self.interaction = Interaction::Idle;
         }
 
-        if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+        // Backspace must not delete the selected node while the user is typing
+        // in the variable-name field.
+        let typing = ui.ctx().memory(|m| m.focused()).is_some();
+        if !typing
+            && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        {
             if let Some(id) = self.selected.take() {
+                self.push_undo();
                 self.graph.remove_node(id);
                 self.mark_stale();
             }
@@ -463,18 +479,20 @@ impl CatPaws {
 
             if zoom > 0.5 {
                 painter.text(
-                    pos2(r.min.x + 10.0 * zoom, r.min.y + 13.0 * zoom),
+                    pos2(r.min.x + 10.0 * zoom, r.min.y + 14.0 * zoom),
                     Align2::LEFT_CENTER,
                     node.kind.title(),
-                    FontId::proportional(14.0 * zoom),
+                    FontId::proportional(15.5 * zoom),
                     palette.on_category(),
                 );
                 painter.text(
-                    pos2(r.min.x + 10.0 * zoom, r.min.y + 30.0 * zoom),
+                    pos2(r.min.x + 10.0 * zoom, r.min.y + 31.0 * zoom),
                     Align2::LEFT_CENTER,
                     node.kind.subtitle(),
-                    FontId::proportional(10.5 * zoom),
-                    palette.on_category().gamma_multiply(0.75),
+                    FontId::proportional(12.0 * zoom),
+                    // Only slightly dimmed: at this size a heavy fade made the
+                    // subtitle unreadable against the header colour.
+                    palette.on_category().gamma_multiply(0.88),
                 );
             }
 
@@ -549,8 +567,8 @@ impl CatPaws {
                         pos2(x, center.y),
                         anchor,
                         &pin.name,
-                        FontId::proportional(11.5 * zoom),
-                        palette.text,
+                        FontId::proportional(13.0 * zoom),
+                        palette.text_strong,
                     );
                 }
             }
@@ -563,8 +581,8 @@ impl CatPaws {
             pos2(rect.min.x + 12.0, rect.max.y - 12.0),
             Align2::LEFT_BOTTOM,
             "drag empty space to pan  ·  scroll to zoom  ·  drag a pin to wire  ·  alt-click a pin to cut  ·  delete removes a node",
-            FontId::proportional(11.0),
-            palette.text_faint,
+            FontId::proportional(12.5),
+            palette.text,
         );
     }
 }

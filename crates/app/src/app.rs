@@ -34,11 +34,28 @@ pub struct CatPaws {
     new_var_type: DataType,
     /// Remembered so palette buttons can drop new nodes into the middle of the view.
     pub(crate) last_canvas: Rect,
+
+    /// Graph snapshots from *before* each change, oldest first.
+    ///
+    /// Whole-graph copies rather than a diff: a graph is a handful of small
+    /// structs, so a clone costs almost nothing, and it makes undo impossible to
+    /// get subtly wrong as new node kinds and edit paths are added.
+    undo_stack: Vec<Graph>,
 }
+
+/// How many changes can be undone before the oldest is forgotten.
+const UNDO_LIMIT: usize = 200;
 
 impl CatPaws {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let app = CatPaws {
+        let app = CatPaws::fresh();
+        Palette::new(app.mode).apply(&cc.egui_ctx);
+        app
+    }
+
+    /// The initial state, with no egui context involved so tests can build one.
+    fn fresh() -> Self {
+        CatPaws {
             graph: sample_graph(),
             view: View::default(),
             interaction: Interaction::Idle,
@@ -52,13 +69,52 @@ impl CatPaws {
             new_var_name: String::new(),
             new_var_type: DataType::Int,
             last_canvas: Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
-        };
-        Palette::new(app.mode).apply(&cc.egui_ctx);
-        app
+            undo_stack: Vec::new(),
+        }
     }
 
     pub fn palette(&self) -> Palette {
         Palette::new(self.mode)
+    }
+
+    /// Records the current graph so the change about to happen can be undone.
+    /// Call this *before* mutating.
+    pub(crate) fn push_undo(&mut self) {
+        let snapshot = self.graph.clone();
+        self.remember(snapshot);
+    }
+
+    /// Stores an already-taken snapshot. Used where the widget mutates in place
+    /// and the "before" copy had to be taken earlier in the frame.
+    pub(crate) fn remember(&mut self, snapshot: Graph) {
+        self.undo_stack.push(snapshot);
+        if self.undo_stack.len() > UNDO_LIMIT {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    pub(crate) fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub(crate) fn undo(&mut self) {
+        let Some(previous) = self.undo_stack.pop() else {
+            return;
+        };
+        self.graph = previous;
+
+        // Whatever was selected or being dragged may no longer exist.
+        if self.selected.is_some_and(|id| self.graph.node(id).is_none()) {
+            self.selected = None;
+        }
+        self.interaction = Interaction::Idle;
+
+        self.program = None;
+        let left = self.undo_stack.len();
+        self.status = Status::Stale(format!(
+            "undone — {left} step{} left",
+            if left == 1 { "" } else { "s" }
+        ));
     }
 
     /// Called whenever the graph changes: the last compile no longer describes it.
@@ -122,6 +178,7 @@ impl CatPaws {
 
     /// Adds a node in the middle of the current view.
     fn add_node(&mut self, kind: NodeKind) {
+        self.push_undo();
         let center = self
             .view
             .to_world(self.last_canvas, self.last_canvas.center());
@@ -143,11 +200,35 @@ impl CatPaws {
                 );
                 ui.label(
                     RichText::new("blueprint editor")
-                        .size(11.0)
+                        .size(12.5)
                         .color(palette.text_faint),
                 );
 
                 ui.add_space(16.0);
+
+                let can_undo = self.can_undo();
+                let undo_clicked = icon_button(
+                    ui,
+                    Icon::Undo,
+                    "Undo",
+                    if can_undo {
+                        palette.node_body
+                    } else {
+                        palette.node_body.gamma_multiply(0.55)
+                    },
+                    if can_undo {
+                        palette.text_strong
+                    } else {
+                        palette.text_faint
+                    },
+                )
+                .on_hover_text("Undo the last change  (Cmd+Z / Ctrl+Z)")
+                .clicked();
+                if undo_clicked && can_undo {
+                    self.undo();
+                }
+
+                ui.add_space(6.0);
 
                 if icon_button(
                     ui,
@@ -200,7 +281,7 @@ impl CatPaws {
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(6.0);
-                    ui.label(RichText::new("ADD NODE").size(11.0).color(palette.text_faint));
+                    ui.label(RichText::new("ADD NODE").size(12.5).color(palette.text_faint));
                     ui.add_space(4.0);
 
                     let buttons: Vec<(&str, NodeKind)> = vec![
@@ -226,13 +307,13 @@ impl CatPaws {
 
                     ui.add_space(12.0);
                     ui.separator();
-                    ui.label(RichText::new("VARIABLES").size(11.0).color(palette.text_faint));
+                    ui.label(RichText::new("VARIABLES").size(12.5).color(palette.text_faint));
                     ui.add_space(4.0);
                     self.ui_variables(ui);
 
                     ui.add_space(12.0);
                     ui.separator();
-                    ui.label(RichText::new("SELECTED NODE").size(11.0).color(palette.text_faint));
+                    ui.label(RichText::new("SELECTED NODE").size(12.5).color(palette.text_faint));
                     ui.add_space(4.0);
                     self.ui_inspector(ui);
                 });
@@ -244,29 +325,36 @@ impl CatPaws {
         let mut to_remove: Option<String> = None;
         let mut to_add: Option<NodeKind> = None;
 
+        // These widgets edit the graph in place, so the "before" copy has to be
+        // taken now, and is only kept if an edit actually begins this frame.
+        let before = self.graph.clone();
+        let mut edit_began = false;
+        let mut edited = false;
+
         for name in &names {
             let ty = self.graph.vars[name].ty;
             ui.horizontal(|ui| {
                 ui.label(RichText::new(name).strong());
-                ui.label(RichText::new(ty.label()).size(10.0));
+                ui.label(RichText::new(ty.label()).size(12.0));
             });
             ui.horizontal(|ui| {
                 ui.label("starts at");
                 let decl = self.graph.vars.get_mut(name).expect("just listed");
-                match &mut decl.initial {
-                    Value::Int(v) => {
-                        ui.add(egui::DragValue::new(v));
-                    }
-                    Value::Float(v) => {
-                        ui.add(egui::DragValue::new(v).speed(0.1));
-                    }
-                    Value::Bool(v) => {
-                        ui.checkbox(v, "");
-                    }
-                    Value::Str(v) => {
-                        ui.text_edit_singleline(v);
-                    }
-                }
+                // One undo entry per editing session, not one per frame or per
+                // keystroke: snapshot when a drag or a focus begins. A checkbox
+                // has no such session, so its single change is the whole edit.
+                let (r, one_shot) = match &mut decl.initial {
+                    Value::Int(v) => (ui.add(egui::DragValue::new(v)), false),
+                    Value::Float(v) => (ui.add(egui::DragValue::new(v).speed(0.1)), false),
+                    Value::Bool(v) => (ui.checkbox(v, ""), true),
+                    Value::Str(v) => (ui.text_edit_singleline(v), false),
+                };
+                edit_began |= if one_shot {
+                    r.changed()
+                } else {
+                    r.drag_started() || r.gained_focus()
+                };
+                edited |= r.changed();
             });
             ui.horizontal(|ui| {
                 if ui.small_button("get").clicked() {
@@ -309,8 +397,16 @@ impl CatPaws {
             .clicked()
         {
             let name = self.new_var_name.trim().to_string();
+            self.push_undo();
             self.graph.declare_var(name, self.new_var_type);
             self.new_var_name.clear();
+            self.mark_stale();
+        }
+
+        if edit_began {
+            self.remember(before);
+        }
+        if edited {
             self.mark_stale();
         }
 
@@ -318,6 +414,7 @@ impl CatPaws {
             self.add_node(kind);
         }
         if let Some(name) = to_remove {
+            self.push_undo();
             self.graph.vars.remove(&name);
             self.mark_stale();
         }
@@ -328,44 +425,64 @@ impl CatPaws {
         let Some(id) = self.selected else {
             ui.label(
                 RichText::new("click a node to edit its value")
-                    .size(11.0)
+                    .size(12.5)
                     .color(palette.text_faint),
             );
             return;
         };
-        let Some(node) = self.graph.node_mut(id) else {
+        if self.graph.node(id).is_none() {
             self.selected = None;
             return;
-        };
+        }
 
-        ui.label(RichText::new(node.kind.title()).strong());
-        let mut changed = false;
-        match &mut node.kind {
-            NodeKind::LitInt(v) => {
-                changed |= ui.add(egui::DragValue::new(v)).changed();
-            }
-            NodeKind::LitFloat(v) => {
-                changed |= ui.add(egui::DragValue::new(v).speed(0.1)).changed();
-            }
-            NodeKind::LitBool(v) => {
-                changed |= ui.checkbox(v, "true").changed();
-            }
-            NodeKind::LitStr(v) => {
-                changed |= ui.text_edit_singleline(v).changed();
-            }
-            _ => {
-                ui.label(
-                    RichText::new("nothing to edit on this node")
-                        .size(11.0)
-                        .color(palette.text_faint),
-                );
+        // Same story as the variable editors: snapshot before, keep only if an
+        // edit actually starts. See `ui_variables`.
+        let before = self.graph.clone();
+        let mut edit_began = false;
+        let mut edited = false;
+
+        {
+            let node = self.graph.node_mut(id).expect("checked just above");
+            ui.label(RichText::new(node.kind.title()).strong());
+
+            let widget = match &mut node.kind {
+                NodeKind::LitInt(v) => Some((ui.add(egui::DragValue::new(v)), false)),
+                NodeKind::LitFloat(v) => {
+                    Some((ui.add(egui::DragValue::new(v).speed(0.1)), false))
+                }
+                NodeKind::LitBool(v) => Some((ui.checkbox(v, "true"), true)),
+                NodeKind::LitStr(v) => Some((ui.text_edit_singleline(v), false)),
+                _ => None,
+            };
+
+            match widget {
+                Some((r, one_shot)) => {
+                    edit_began = if one_shot {
+                        r.changed()
+                    } else {
+                        r.drag_started() || r.gained_focus()
+                    };
+                    edited = r.changed();
+                }
+                None => {
+                    ui.label(
+                        RichText::new("nothing to edit on this node")
+                            .size(12.5)
+                            .color(palette.text_faint),
+                    );
+                }
             }
         }
-        if changed {
+
+        if edit_began {
+            self.remember(before);
+        }
+        if edited {
             self.mark_stale();
         }
 
         if ui.button("Delete node").clicked() {
+            self.push_undo();
             self.graph.remove_node(id);
             self.selected = None;
             self.mark_stale();
@@ -408,7 +525,7 @@ impl CatPaws {
                         if let Some(program) = &self.program {
                             ui.label(
                                 RichText::new("compiled program")
-                                    .size(11.0)
+                                    .size(12.5)
                                     .color(palette.text_faint),
                             );
                             for line in program.listing() {
@@ -421,7 +538,7 @@ impl CatPaws {
                     if self.output.is_empty() {
                         ui.label(
                             RichText::new("output appears here when you run")
-                                .size(11.0)
+                                .size(12.5)
                                 .color(palette.text_faint),
                         );
                     } else {
@@ -442,6 +559,17 @@ impl eframe::App for CatPaws {
     // egui 0.36 hands the app a `Ui` rather than a `Context`, and panels are
     // nested inside it.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // `command` is already Cmd on macOS and Ctrl elsewhere; `ctrl` is also
+        // accepted so Ctrl+Z works on a Mac too.
+        let undo_shortcut = ui.input(|i| {
+            (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Z)
+        });
+        // Don't steal Cmd+Z from a text field the user is typing in.
+        let typing = ui.ctx().memory(|m| m.focused()).is_some();
+        if undo_shortcut && !typing {
+            self.undo();
+        }
+
         self.ui_toolbar(ui);
         self.ui_side_panel(ui);
         self.ui_bottom(ui);
@@ -505,4 +633,123 @@ fn sample_graph() -> Graph {
     wire(fine_text, 0, fine, 1);
 
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cat_paws_core::{PinKind, Side};
+
+    fn first_node_of(app: &CatPaws, wanted: &NodeKind) -> NodeId {
+        app.graph
+            .nodes()
+            .find(|n| std::mem::discriminant(&n.kind) == std::mem::discriminant(wanted))
+            .map(|n| n.id)
+            .expect("sample graph should contain this node kind")
+    }
+
+    #[test]
+    fn nothing_to_undo_on_a_fresh_editor() {
+        let mut app = CatPaws::fresh();
+        assert!(!app.can_undo());
+        let before = app.graph.node_ids();
+        // Undoing with an empty stack must be a harmless no-op, not a panic.
+        app.undo();
+        assert_eq!(app.graph.node_ids(), before);
+    }
+
+    #[test]
+    fn undo_restores_a_deleted_node_and_its_wires() {
+        let mut app = CatPaws::fresh();
+        let branch = first_node_of(&app, &NodeKind::Branch);
+        let nodes_before = app.graph.node_ids().len();
+        let links_before = app.graph.links().len();
+
+        app.push_undo();
+        app.graph.remove_node(branch);
+        assert_eq!(app.graph.node_ids().len(), nodes_before - 1);
+        assert!(app.graph.links().len() < links_before, "wires should have gone too");
+
+        app.undo();
+        assert_eq!(app.graph.node_ids().len(), nodes_before);
+        assert_eq!(
+            app.graph.links().len(),
+            links_before,
+            "undo must bring the wires back, not just the node"
+        );
+        assert!(!app.can_undo());
+    }
+
+    #[test]
+    fn undo_steps_back_one_change_at_a_time() {
+        let mut app = CatPaws::fresh();
+        let start = app.graph.node_ids().len();
+
+        app.add_node(NodeKind::LitInt(1));
+        app.add_node(NodeKind::LitInt(2));
+        app.add_node(NodeKind::LitInt(3));
+        assert_eq!(app.graph.node_ids().len(), start + 3);
+
+        app.undo();
+        assert_eq!(app.graph.node_ids().len(), start + 2);
+        app.undo();
+        assert_eq!(app.graph.node_ids().len(), start + 1);
+        app.undo();
+        assert_eq!(app.graph.node_ids().len(), start);
+        assert!(!app.can_undo());
+    }
+
+    #[test]
+    fn undo_restores_a_moved_node_position() {
+        let mut app = CatPaws::fresh();
+        let branch = first_node_of(&app, &NodeKind::Branch);
+        let original = app.graph.node(branch).expect("exists").pos;
+
+        app.push_undo();
+        app.graph.node_mut(branch).expect("exists").pos = (999.0, -42.0);
+
+        app.undo();
+        assert_eq!(app.graph.node(branch).expect("exists").pos, original);
+    }
+
+    #[test]
+    fn undo_clears_a_selection_pointing_at_a_vanished_node() {
+        let mut app = CatPaws::fresh();
+        // Add a node (which selects it), then undo the addition.
+        app.add_node(NodeKind::LitInt(7));
+        let added = app.selected.expect("adding a node selects it");
+        assert!(app.graph.node(added).is_some());
+
+        app.undo();
+        assert!(app.graph.node(added).is_none());
+        assert_eq!(
+            app.selected, None,
+            "selection must not dangle on a node undo removed"
+        );
+    }
+
+    #[test]
+    fn undo_stack_is_capped() {
+        let mut app = CatPaws::fresh();
+        for _ in 0..(UNDO_LIMIT + 25) {
+            app.push_undo();
+        }
+        assert_eq!(app.undo_stack.len(), UNDO_LIMIT);
+    }
+
+    /// A refused connection changes nothing, so it must not leave an undo step
+    /// that appears to do nothing when used.
+    #[test]
+    fn undo_is_not_recorded_for_a_rejected_wire() {
+        let mut app = CatPaws::fresh();
+        let text = first_node_of(&app, &NodeKind::LitStr(String::new()));
+        let branch = first_node_of(&app, &NodeKind::Branch);
+
+        let from = PinRef { node: text, side: Side::Out, index: 0 };
+        let to = PinRef { node: branch, side: Side::In, index: 1 };
+        // Sanity: this is a string into a boolean condition.
+        assert!(matches!(app.graph.pin_kind(to), Some(PinKind::Data(_))));
+        assert!(app.graph.connect(from, to).is_err());
+        assert!(!app.can_undo());
+    }
 }
