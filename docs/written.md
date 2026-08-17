@@ -104,9 +104,26 @@ A fragment is given its own `Event start` **only if the canvas has none**. Addin
 would stop a working program compiling, so an existing program is left for the reader to
 wire the new piece into.
 
+## Repeating
+
+```
+repeat integer '10' {
+    print string 'meow'
+}
+print string 'done'
+```
+
+`repeat` takes a whole number and a block. The count is read **once**, before the first
+pass, so changing what fed it from inside does not lengthen the loop — the same rule
+Scratch uses. A count of zero, or a negative one, runs the body no times.
+
+Unlike `if`, something may follow a `repeat`. A Branch's only outputs are its two arms, so
+there is nowhere for a following step to attach; a Repeat has a `then` pin for exactly
+that. Writing a step after an `if` is reported rather than quietly wired into the true arm.
+
 ## What it does not do yet
 
-Loops, since the graph has none. Functions, since the graph has none. And there is no way
-to write a node that has no place in a statement — a value node sitting on its own — which
-is fine, because that is what dragging is for.
+Functions, since the graph has none. Loops that stop on a condition rather than a count.
+And there is no way to write a node that has no place in a statement — a value node
+sitting on its own — which is fine, because that is what dragging is for.
 

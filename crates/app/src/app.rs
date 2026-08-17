@@ -374,6 +374,7 @@ impl CatPaws {
                     let buttons: Vec<(&str, NodeKind)> = vec![
                         ("Event start", NodeKind::EventStart),
                         ("Branch", NodeKind::Branch),
+                        ("Repeat", NodeKind::Repeat),
                         ("Print text", NodeKind::Print { ty: DataType::Str }),
                         ("Print number", NodeKind::Print { ty: DataType::Int }),
                         ("Less than", NodeKind::LessThan),

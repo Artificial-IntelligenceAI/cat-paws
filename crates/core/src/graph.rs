@@ -116,6 +116,18 @@ pub enum NodeKind {
     EventStart,
     /// Sends execution down one of two paths depending on a boolean.
     Branch,
+    /// Runs the chain on its `body` pin a fixed number of times, then carries on
+    /// down `then`.
+    ///
+    /// The body is an ordinary chain that ends, exactly like a Branch arm — so
+    /// execution wires still never form a cycle, and the compiler's rule against
+    /// cycles stays a flat rule rather than a conditional one. It is also the shape
+    /// a Scratch user already knows: blocks sit *inside* the loop's mouth.
+    ///
+    /// `times` is read once, before the first pass. Changing the variable that fed
+    /// it while the loop runs does not lengthen or shorten the loop, which is what
+    /// Scratch does too.
+    Repeat,
     /// Writes a line to the output console.
     ///
     /// Carries the type it prints, so a number can be shown without first being turned
@@ -145,6 +157,7 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => "Event start".to_string(),
             NodeKind::Branch => "Branch".to_string(),
+            NodeKind::Repeat => "Repeat".to_string(),
             NodeKind::Print { ty } => match ty {
                 DataType::Str => "Print".to_string(),
                 _ => format!("Print {}", ty.label()),
@@ -165,6 +178,7 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => "entry point".to_string(),
             NodeKind::Branch => "true / false".to_string(),
+            NodeKind::Repeat => "do it n times".to_string(),
             NodeKind::Print { .. } => "write a line".to_string(),
             NodeKind::LessThan => "number compare".to_string(),
             NodeKind::Arith { ty, .. } => format!("{} maths", ty.label()),
@@ -180,7 +194,7 @@ impl NodeKind {
     pub fn category(&self) -> Category {
         match self {
             NodeKind::EventStart => Category::Event,
-            NodeKind::Branch => Category::Flow,
+            NodeKind::Branch | NodeKind::Repeat => Category::Flow,
             NodeKind::Print { .. } | NodeKind::SetVar { .. } => Category::Action,
             NodeKind::LessThan | NodeKind::Arith { .. } => Category::Pure,
             NodeKind::GetVar { .. }
@@ -198,6 +212,7 @@ impl NodeKind {
                 Pin::exec("in"),
                 Pin::data("condition", DataType::Bool),
             ],
+            NodeKind::Repeat => vec![Pin::exec("in"), Pin::data("times", DataType::Int)],
             NodeKind::Print { ty } => vec![
                 Pin::exec("in"),
                 Pin::data(if *ty == DataType::Str { "text" } else { "value" }, *ty),
@@ -220,6 +235,10 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => vec![Pin::exec("then")],
             NodeKind::Branch => vec![Pin::exec("true"), Pin::exec("false")],
+            // "body" is the chain that repeats; "then" is what happens once it has
+            // finished repeating. Two execution outputs, like Branch, so the editor
+            // needs nothing new to draw it.
+            NodeKind::Repeat => vec![Pin::exec("body"), Pin::exec("then")],
             NodeKind::Print { .. } => vec![Pin::exec("then")],
             NodeKind::LessThan => vec![Pin::data("result", DataType::Bool)],
             NodeKind::Arith { ty, .. } => vec![Pin::data("result", *ty)],

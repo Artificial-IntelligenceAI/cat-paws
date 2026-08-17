@@ -47,6 +47,9 @@ impl Problem {
 /// Existing nodes are left alone: what is written is added beside them, wired among
 /// itself. Nothing you built by hand can be destroyed by typing.
 pub fn generate(graph: &mut Graph, text: &str) -> Result<Vec<NodeId>, Vec<Problem>> {
+    // Kept so a run that fails partway can put the graph back. Half a program's worth
+    // of nodes appearing next to a list of problems would be worse than nothing.
+    let vars_before = graph.vars.clone();
     let lines = read_lines(text);
     let mut parser = Parser { lines, at: 0 };
     let body = parser.block(0)?;
@@ -68,10 +71,15 @@ pub fn generate(graph: &mut Graph, text: &str) -> Result<Vec<NodeId>, Vec<Proble
         builder.wire(entry, 0, first, 0);
     }
 
-    if builder.problems.is_empty() {
-        Ok(builder.made)
+    let Builder { made, problems, .. } = builder;
+    if problems.is_empty() {
+        Ok(made)
     } else {
-        Err(builder.problems)
+        for id in made {
+            graph.remove_node(id);
+        }
+        graph.vars = vars_before;
+        Err(problems)
     }
 }
 
@@ -109,6 +117,19 @@ enum Stmt {
     Set { name: String, value: Expr, line: usize },
     Print { value: Expr, line: usize },
     If { condition: Expr, then: Vec<Stmt>, otherwise: Vec<Stmt>, line: usize },
+    Repeat { times: Expr, body: Vec<Stmt>, line: usize },
+}
+
+impl Stmt {
+    fn line(&self) -> usize {
+        match self {
+            Stmt::Declare { line, .. }
+            | Stmt::Set { line, .. }
+            | Stmt::Print { line, .. }
+            | Stmt::If { line, .. }
+            | Stmt::Repeat { line, .. } => *line,
+        }
+    }
 }
 
 /// A value, before it becomes nodes.
@@ -136,8 +157,8 @@ impl Parser {
                 if depth == 0 {
                     problems.push(Problem::new(
                         line.number,
-                        "there is a closing brace here with no matching if",
-                        "delete it, or add the `if` it was meant to close",
+                        "there is a closing brace here with nothing open for it to close",
+                        "delete it, or add the `if` or `repeat` it was meant to close",
                     ));
                     self.at += 1;
                     continue;
@@ -211,10 +232,33 @@ impl Parser {
             });
         }
 
+        if let Some(rest) = text.strip_prefix("repeat ") {
+            let head = rest.trim_end().strip_suffix('{').ok_or_else(|| {
+                Problem::new(
+                    line,
+                    "this `repeat` does not open a block",
+                    "put a `{` at the end of the line, and a `}` on its own line after the steps",
+                )
+            })?;
+            let times = parse_expr(line, head)?;
+            let body = self.block(1).map_err(|mut p| p.remove(0))?;
+            match self.lines.get(self.at) {
+                Some(l) if l.text == "}" => self.at += 1,
+                _ => {
+                    return Err(Problem::new(
+                        line,
+                        "this `repeat` is never closed",
+                        "add a `}` on its own line after the steps inside it",
+                    ))
+                }
+            }
+            return Ok(Stmt::Repeat { times, body, line });
+        }
+
         Err(Problem::new(
             line,
             format!("'{}' does not start with anything Cat Paws knows", first_word(&text)),
-            "a line starts with declare, set, print or if",
+            "a line starts with declare, set, print, if or repeat",
         ))
     }
 }
@@ -356,6 +400,16 @@ fn parse_value(line: usize, ty: DataType, raw: &str) -> Result<Value, Problem> {
     })
 }
 
+/// "an integer", "a float" — a message that says "not float" reads like a machine.
+fn a_an(label: &str) -> String {
+    let article = if label.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {label}")
+}
+
 // ── building ────────────────────────────────────────────────────────────────
 
 /// Where to start laying out, so generated nodes do not land on existing ones.
@@ -403,7 +457,7 @@ impl<'a> Builder<'a> {
     /// Build a run of statements, chaining their execution pins. Returns the first.
     fn statements(&mut self, body: &[Stmt]) -> Option<NodeId> {
         let mut first = None;
-        let mut previous: Option<(NodeId, usize)> = None;
+        let mut previous: Option<(NodeId, Option<usize>)> = None;
 
         for stmt in body {
             self.row += ROW;
@@ -411,8 +465,21 @@ impl<'a> Builder<'a> {
             if first.is_none() {
                 first = Some(head);
             }
-            if let Some((prev, pin)) = previous {
-                self.wire(prev, pin, head, 0);
+            match previous {
+                Some((prev, Some(pin))) => self.wire(prev, pin, head, 0),
+                // A Branch has a true pin and a false pin and nothing else, so there
+                // is no pin left to carry on from. Saying so beats wiring this step
+                // into the true arm, which is what a naive chaining would do — and it
+                // would silently delete the arm that was already there.
+                Some((_, None)) => {
+                    self.problems.push(Problem::new(
+                        stmt.line(),
+                        "nothing can follow an `if` yet, because its two paths each end where they end",
+                        "put these steps inside both arms of the if, or make the if the last thing",
+                    ));
+                    return None;
+                }
+                None => {}
             }
             previous = Some((head, tail_pin));
         }
@@ -420,8 +487,8 @@ impl<'a> Builder<'a> {
     }
 
     /// Build one statement. Returns the node execution enters by, and which of its
-    /// output pins the next statement follows.
-    fn statement(&mut self, stmt: &Stmt) -> Option<(NodeId, usize)> {
+    /// output pins the next statement follows — `None` when nothing may follow.
+    fn statement(&mut self, stmt: &Stmt) -> Option<(NodeId, Option<usize>)> {
         match stmt {
             Stmt::Declare { name, value, line } => {
                 let ty = self.type_of(value, *line)?;
@@ -432,7 +499,7 @@ impl<'a> Builder<'a> {
                 let set = self.add(NodeKind::SetVar { name: name.clone(), ty }, COL);
                 let source = self.value(value, *line)?;
                 self.wire(source.0, source.1, set, 1);
-                Some((set, 0))
+                Some((set, Some(0)))
             }
             Stmt::Set { name, value, line } => {
                 let Some(decl) = self.graph.vars.get(name) else {
@@ -447,14 +514,14 @@ impl<'a> Builder<'a> {
                 let set = self.add(NodeKind::SetVar { name: name.clone(), ty }, COL);
                 let source = self.value(value, *line)?;
                 self.wire(source.0, source.1, set, 1);
-                Some((set, 0))
+                Some((set, Some(0)))
             }
             Stmt::Print { value, line } => {
                 let ty = self.type_of(value, *line)?;
                 let show = self.add(NodeKind::Print { ty }, COL);
                 let source = self.value(value, *line)?;
                 self.wire(source.0, source.1, show, 1);
-                Some((show, 0))
+                Some((show, Some(0)))
             }
             Stmt::If { condition, then, otherwise, line } => {
                 let branch = self.add(NodeKind::Branch, COL);
@@ -468,7 +535,27 @@ impl<'a> Builder<'a> {
                     self.wire(branch, 1, head, 0);
                 }
                 // Both arms are their own chains, so nothing follows the branch itself.
-                Some((branch, 0))
+                Some((branch, None))
+            }
+            Stmt::Repeat { times, body, line } => {
+                let ty = self.type_of(times, *line)?;
+                if ty != DataType::Int {
+                    self.problems.push(Problem::new(
+                        *line,
+                        format!("a repeat counts a whole number of times, not {}", a_an(ty.label())),
+                        "use a whole number, as in repeat integer '10' {",
+                    ));
+                    return None;
+                }
+                let node = self.add(NodeKind::Repeat, COL);
+                let count = self.value(times, *line)?;
+                self.wire(count.0, count.1, node, 1);
+
+                if let Some(head) = self.statements(body) {
+                    self.wire(node, 0, head, 0);
+                }
+                // Unlike a Branch, a Repeat does have somewhere to carry on to.
+                Some((node, Some(1)))
             }
         }
     }

@@ -230,6 +230,7 @@ pub fn compile(graph: &Graph) -> Result<Program, Vec<Diagnostic>> {
         diags: Vec::new(),
         exec_path: Vec::new(),
         values: Values::new(graph),
+        repeats: 0,
     };
 
     c.emit_after(PinRef {
@@ -261,6 +262,8 @@ struct Compiler<'a> {
     /// Nodes on the current execution path, used to catch loops.
     exec_path: Vec<NodeId>,
     values: Values<'a>,
+    /// How many Repeat nodes have been compiled, so each gets its own counter.
+    repeats: usize,
 }
 
 /// Turns data wires into `Expr` trees.
@@ -345,6 +348,47 @@ impl<'a> Compiler<'a> {
                 if let Instr::Jump(target) = &mut self.instrs[jump_to_end] {
                     *target = end;
                 }
+            }
+            NodeKind::Repeat => {
+                let times = self.values.input_expr(id, 1, DataType::Int);
+
+                // A counter the user cannot name themselves — the Variables panel
+                // has no way to type a space or a `#`. Counting down rather than up
+                // means the test is against zero and needs no second value to hold
+                // the limit in.
+                let counter = format!("repeat #{}", self.repeats);
+                self.repeats += 1;
+
+                // Read once, before the first pass, so the loop cannot be lengthened
+                // from inside itself.
+                self.instrs.push(Instr::SetVar(counter.clone(), times));
+
+                let head = self.instrs.len();
+                let test = Expr::LessThan(
+                    Box::new(Expr::Lit(Value::Int(0))),
+                    Box::new(Expr::GetVar(counter.clone())),
+                );
+                self.instrs.push(Instr::JumpIfFalse(test, usize::MAX));
+
+                self.emit_after(out(id, 0)); // body
+
+                self.instrs.push(Instr::SetVar(
+                    counter.clone(),
+                    Expr::Arith(
+                        ArithOp::Subtract,
+                        DataType::Int,
+                        Box::new(Expr::GetVar(counter)),
+                        Box::new(Expr::Lit(Value::Int(1))),
+                    ),
+                ));
+                self.instrs.push(Instr::Jump(head));
+
+                let end = self.instrs.len();
+                if let Instr::JumpIfFalse(_, target) = &mut self.instrs[head] {
+                    *target = end;
+                }
+
+                self.emit_after(out(id, 1)); // then
             }
             NodeKind::EventStart => {
                 self.diags.push(Diagnostic::at(

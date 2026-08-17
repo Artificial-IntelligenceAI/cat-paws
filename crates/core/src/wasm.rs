@@ -67,13 +67,13 @@ pub fn emit(graph: &Graph) -> Result<Vec<u8>, Vec<Diagnostic>> {
         strings: StringTable::default(),
         body: Vec::new(),
         exec_path: Vec::new(),
+        local_types: Vec::new(),
     };
 
     // Variables become function locals, in a fixed order so an index means one thing.
-    let mut local_types = Vec::new();
     for (index, (name, decl)) in graph.vars.iter().enumerate() {
         e.locals.insert(name.clone(), index as u32);
-        local_types.push(val_type(decl.ty));
+        e.local_types.push(val_type(decl.ty));
     }
 
     // Each run starts from the declared initial values.
@@ -94,7 +94,7 @@ pub fn emit(graph: &Graph) -> Result<Vec<u8>, Vec<Diagnostic>> {
         return Err(e.diags);
     }
 
-    Ok(e.finish(local_types))
+    Ok(e.finish())
 }
 
 /// Every string literal in the program, laid out in linear memory.
@@ -133,6 +133,10 @@ struct Emitter<'a> {
     body: Vec<Instruction<'static>>,
     /// Nodes on the current execution path, so a cycle is reported rather than hung on.
     exec_path: Vec<NodeId>,
+    /// Every local the function declares: the variables first, then one counter per
+    /// Repeat node. Grown during the walk, so a nested loop cannot reuse the counter
+    /// of the loop containing it.
+    local_types: Vec<ValType>,
 }
 
 impl<'a> Emitter<'a> {
@@ -198,6 +202,42 @@ impl<'a> Emitter<'a> {
                 self.walk_from(out(id, 1));
                 self.body.push(Instruction::End);
             }
+            NodeKind::Repeat => {
+                let times = self.values.input_expr(id, 1, DataType::Int);
+                let counter = self.new_local(ValType::I64);
+
+                // Read once, before the first pass.
+                self.push_expr(&times);
+                self.body.push(Instruction::LocalSet(counter));
+
+                // WebAssembly's `loop` is only a label to jump *back* to — it does not
+                // repeat by itself, and it cannot be broken out of from the inside.
+                // Leaving needs an enclosing `block`, whose label means "jump forward
+                // past the end". So the pair is the idiom: block for the exit, loop for
+                // the return.
+                self.body.push(Instruction::Block(BlockType::Empty));
+                self.body.push(Instruction::Loop(BlockType::Empty));
+
+                // Counting down, tested before the body, so `times` of zero or less
+                // runs it no times rather than once.
+                self.body.push(Instruction::LocalGet(counter));
+                self.body.push(Instruction::I64Const(0));
+                self.body.push(Instruction::I64LeS);
+                self.body.push(Instruction::BrIf(1)); // out of the block: finished
+
+                self.walk_from(out(id, 0)); // body
+
+                self.body.push(Instruction::LocalGet(counter));
+                self.body.push(Instruction::I64Const(1));
+                self.body.push(Instruction::I64Sub);
+                self.body.push(Instruction::LocalSet(counter));
+                self.body.push(Instruction::Br(0)); // back to the loop: go again
+
+                self.body.push(Instruction::End); // loop
+                self.body.push(Instruction::End); // block
+
+                self.walk_from(out(id, 1)); // then
+            }
             NodeKind::EventStart => {
                 self.diags.push(Diagnostic::at(
                 START_IN_CHAIN,
@@ -220,6 +260,12 @@ impl<'a> Emitter<'a> {
         }
 
         self.exec_path.pop();
+    }
+
+    /// Reserve a local and hand back its index.
+    fn new_local(&mut self, ty: ValType) -> u32 {
+        self.local_types.push(ty);
+        self.local_types.len() as u32 - 1
     }
 
     fn push_const(&mut self, value: &Value) {
@@ -281,7 +327,8 @@ impl<'a> Emitter<'a> {
     }
 
     /// Assemble the sections into a finished module.
-    fn finish(mut self, local_types: Vec<ValType>) -> Vec<u8> {
+    fn finish(mut self) -> Vec<u8> {
+        let local_types = std::mem::take(&mut self.local_types);
         let mut module = Module::new();
 
         // Two signatures: the host's print takes a pointer, and main takes nothing.

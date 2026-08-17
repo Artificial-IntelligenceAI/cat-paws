@@ -746,3 +746,226 @@ mod written_tests {
         }
     }
 }
+
+/// Repeat: the first thing in Cat Paws that can run a step more than once.
+///
+/// Every test here runs the program and reads what it printed. A loop that emits
+/// plausible-looking instructions and counts wrong would pass an inspection test and
+/// fail these.
+#[cfg(test)]
+mod repeat_tests {
+    use super::wasm_tests::run_wasm;
+    use super::*;
+
+    fn typed(text: &str) -> Graph {
+        let mut g = Graph::new();
+        written::generate(&mut g, text).unwrap_or_else(|p| panic!("should read: {p:#?}"));
+        g
+    }
+
+    fn ran(text: &str) -> Vec<String> {
+        let g = typed(text);
+        run_wasm(&wasm::emit(&g).unwrap_or_else(|d| panic!("should compile: {d:#?}")))
+    }
+
+    #[test]
+    fn a_body_runs_once_per_count() {
+        assert_eq!(ran("repeat integer '3' {\nprint string 'meow'\n}"), ["meow"; 3]);
+    }
+
+    #[test]
+    fn a_count_of_zero_runs_the_body_no_times() {
+        // Tested before the body rather than after, so this is zero passes and not one.
+        assert!(ran("repeat integer '0' {\nprint string 'meow'\n}").is_empty());
+    }
+
+    #[test]
+    fn a_negative_count_runs_the_body_no_times() {
+        assert!(ran("repeat integer '-4' {\nprint string 'meow'\n}").is_empty());
+    }
+
+    #[test]
+    fn steps_after_a_repeat_still_run() {
+        // The whole point of the `then` pin: a Branch has nowhere to carry on to, and
+        // a Repeat does.
+        assert_eq!(
+            ran("repeat integer '2' {\nprint string 'meow'\n}\nprint string 'done'"),
+            ["meow", "meow", "done"]
+        );
+    }
+
+    #[test]
+    fn a_loop_can_count() {
+        assert_eq!(
+            ran("declare 'n' = integer '0'\n\
+                 repeat integer '5' {\n\
+                     set 'n' = 'n' + integer '1'\n\
+                 }\n\
+                 print 'n'"),
+            ["5"]
+        );
+    }
+
+    #[test]
+    fn nested_loops_do_not_share_a_counter() {
+        // Each Repeat gets its own local. Sharing one would make the inner loop eat the
+        // outer loop's count and run the body three times instead of nine.
+        assert_eq!(
+            ran("declare 'n' = integer '0'\n\
+                 repeat integer '3' {\n\
+                     repeat integer '3' {\n\
+                         set 'n' = 'n' + integer '1'\n\
+                     }\n\
+                 }\n\
+                 print 'n'"),
+            ["9"]
+        );
+    }
+
+    #[test]
+    fn the_count_is_read_once_and_not_again() {
+        // `times` is wired to a variable the body then changes. Scratch reads its count
+        // once too, and a loop that re-read it here would run four times, not two.
+        assert_eq!(
+            ran("declare 'limit' = integer '2'\n\
+                 declare 'n' = integer '0'\n\
+                 repeat 'limit' {\n\
+                     set 'limit' = integer '4'\n\
+                     set 'n' = 'n' + integer '1'\n\
+                 }\n\
+                 print 'n'"),
+            ["2"]
+        );
+    }
+
+    #[test]
+    fn a_branch_inside_a_loop_works() {
+        // The loop's own `br` instructions are written outside the body, so an `if`
+        // nested in it must not shift what they branch to.
+        assert_eq!(
+            ran("declare 'n' = integer '0'\n\
+                 repeat integer '4' {\n\
+                     set 'n' = 'n' + integer '1'\n\
+                     if 'n' < integer '3' {\n\
+                         print string 'early'\n\
+                     } else {\n\
+                         print string 'late'\n\
+                     }\n\
+                 }"),
+            ["early", "early", "late", "late"]
+        );
+    }
+
+    #[test]
+    fn the_interpreter_and_the_compiler_agree_about_loops() {
+        // Two implementations written from different materials — one a flat list with
+        // jump indices, one WebAssembly's structured blocks. Agreement is the evidence.
+        for text in [
+            "repeat integer '3' {\nprint string 'meow'\n}",
+            "repeat integer '0' {\nprint string 'meow'\n}",
+            "declare 'n' = integer '0'\nrepeat integer '7' {\nset 'n' = 'n' + integer '2'\n}\nprint 'n'",
+            "declare 'n' = integer '0'\nrepeat integer '3' {\nrepeat integer '4' {\nset 'n' = 'n' + integer '1'\n}\n}\nprint 'n'",
+            "repeat integer '2' {\nprint string 'a'\n}\nprint string 'b'",
+        ] {
+            let g = typed(text);
+            let interpreted = vm::run_with_limit(&compile(&g).expect("bytecode"), 1_000_000).output;
+            let compiled = run_wasm(&wasm::emit(&g).expect("wasm"));
+            assert_eq!(interpreted, compiled, "disagreement on:\n{text}");
+        }
+    }
+
+    #[test]
+    fn a_loop_drawn_by_hand_compiles_the_same_way() {
+        // Nothing here came from the written form: the nodes are placed and wired
+        // directly, the way the canvas does it.
+        let mut g = Graph::new();
+        let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let count = g.add_node(NodeKind::LitInt(3), (0.0, 100.0));
+        let repeat = g.add_node(NodeKind::Repeat, (200.0, 0.0));
+        let text = g.add_node(NodeKind::LitStr("meow".into()), (200.0, 200.0));
+        let print = g.add_node(NodeKind::Print { ty: DataType::Str }, (400.0, 0.0));
+
+        let out = |node, index| PinRef { node, side: Side::Out, index };
+        let inp = |node, index| PinRef { node, side: Side::In, index };
+        g.connect(out(start, 0), inp(repeat, 0)).unwrap();
+        g.connect(out(count, 0), inp(repeat, 1)).unwrap();
+        g.connect(out(repeat, 0), inp(print, 0)).unwrap();
+        g.connect(out(text, 0), inp(print, 1)).unwrap();
+
+        assert_eq!(run_wasm(&wasm::emit(&g).unwrap()), ["meow"; 3]);
+    }
+
+    #[test]
+    fn a_body_wired_back_into_its_own_loop_unplugs_it_instead_of_cycling() {
+        // Repeat repeats by *holding* its body, not by the wires going round, so this
+        // was written expecting CP-FLOW-03. It cannot happen, and not because of
+        // Repeat: every node has exactly one execution input, and a wire into an
+        // occupied input replaces what was there. So the back edge steals the input the
+        // forward chain was using, and the loop falls off the program instead of
+        // closing. (Data wires *can* cycle — a value node has several input pins, so a
+        // back edge has a free one to land on. That is why CP-WIRE-02 is reachable and
+        // CP-FLOW-03 is not.)
+        let mut g = Graph::new();
+        let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let count = g.add_node(NodeKind::LitInt(3), (0.0, 100.0));
+        let repeat = g.add_node(NodeKind::Repeat, (200.0, 0.0));
+        let text = g.add_node(NodeKind::LitStr("meow".into()), (200.0, 200.0));
+        let print = g.add_node(NodeKind::Print { ty: DataType::Str }, (400.0, 0.0));
+
+        let out = |node, index| PinRef { node, side: Side::Out, index };
+        let inp = |node, index| PinRef { node, side: Side::In, index };
+        g.connect(out(start, 0), inp(repeat, 0)).unwrap();
+        g.connect(out(count, 0), inp(repeat, 1)).unwrap();
+        g.connect(out(repeat, 0), inp(print, 0)).unwrap();
+        g.connect(out(text, 0), inp(print, 1)).unwrap();
+        assert_eq!(run_wasm(&wasm::emit(&g).unwrap()), ["meow"; 3]);
+
+        // Now wire the print back into the Repeat, which is how someone would try to
+        // draw a loop by hand.
+        g.connect(out(print, 0), inp(repeat, 0)).unwrap();
+        assert!(
+            g.target_of(out(start, 0)).is_none(),
+            "the Event start should have lost its wire to the Repeat"
+        );
+        assert!(
+            run_wasm(&wasm::emit(&g).unwrap()).is_empty(),
+            "nothing is reachable from the start any more"
+        );
+    }
+
+    #[test]
+    fn a_repeat_counting_something_that_is_not_a_whole_number_is_refused() {
+        let mut g = Graph::new();
+        let problems = written::generate(&mut g, "repeat float '2.5' {\nprint string 'meow'\n}")
+            .expect_err("a float count should be refused");
+        assert_eq!(problems[0].message, "a repeat counts a whole number of times, not a float");
+    }
+
+    #[test]
+    fn a_failed_generation_leaves_the_canvas_as_it_was() {
+        // Half a program appearing beside a list of problems is worse than nothing.
+        let mut g = Graph::new();
+        written::generate(&mut g, "declare 'health' = integer '20'").unwrap();
+        let before = g.node_ids();
+
+        written::generate(&mut g, "declare 'x' = integer '1'\nrepeat float '2.5' {\nprint 'x'\n}")
+            .expect_err("should be refused");
+
+        assert_eq!(g.node_ids(), before, "nodes were left behind");
+        assert!(!g.vars.contains_key("x"), "a variable was left behind");
+    }
+
+    #[test]
+    fn steps_after_an_if_are_reported_rather_than_silently_rewired() {
+        // A Branch's only outputs are its two arms. Chaining the next step onto pin 0
+        // would replace the true arm — the program would compile and be wrong.
+        let mut g = Graph::new();
+        let problems = written::generate(
+            &mut g,
+            "if integer '1' < integer '2' {\nprint string 'yes'\n}\nprint string 'after'",
+        )
+        .expect_err("should be refused");
+        assert_eq!(problems[0].line, 4);
+        assert!(problems[0].message.contains("nothing can follow an `if`"));
+    }
+}
