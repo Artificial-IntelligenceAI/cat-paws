@@ -73,6 +73,29 @@ pub const NOT_A_VALUE: Code = Code::new(Area::Wire, 3);
 /// A node refers to a variable that does not exist.
 pub const NO_SUCH_VAR: Code = Code::new(Area::Name, 1);
 
+impl Code {
+    /// The rule this code enforces, stated once so a reader learns the language rather
+    /// than only this instance of breaking it.
+    ///
+    /// Written by hand, in the reader's terms. Generating these from the compiler's own
+    /// conditions would produce something true and useless — the check behind an empty
+    /// pin is "source_of returned None", which teaches nobody what Cat Paws expects.
+    pub fn rule(self) -> &'static str {
+        match (self.area, self.number) {
+            (Area::Flow, 1) => "a program starts at an Event start node, so every program needs exactly one.",
+            (Area::Flow, 2) => "a program has one beginning, so only one Event start may be on the canvas.",
+            (Area::Flow, 3) => "the grey wires run forwards only. A step cannot lead back to one that already ran.",
+            (Area::Flow, 4) => "an Event start begins a program, so nothing may lead into it.",
+            (Area::Flow, 5) => "grey wires join steps and coloured wires carry values. A node that produces a value is not a step.",
+            (Area::Wire, 1) => "every coloured input needs a wire. There is no default value to fall back on.",
+            (Area::Wire, 2) => "a value is worked out from the wires feeding it, so it cannot be worked out from itself.",
+            (Area::Wire, 3) => "only a node with a coloured output produces a value that something else can read.",
+            (Area::Name, 1) => "a variable is created in the Variables panel before a node can read or write it.",
+            _ => "",
+        }
+    }
+}
+
 /// A problem found while compiling.
 ///
 /// Two separate sentences, deliberately. `message` says what is wrong; `fix` says what to

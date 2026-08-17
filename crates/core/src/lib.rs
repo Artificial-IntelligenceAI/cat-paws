@@ -282,6 +282,20 @@ mod diagnostic_tests {
     use super::tests::{reference_graph, wire};
     use super::*;
 
+    /// Every code the compiler can produce. Adding one here is what makes the tests
+    /// below cover it.
+    const ALL_CODES: [Code; 9] = [
+        compile::NO_START,
+        compile::MANY_STARTS,
+        compile::EXEC_LOOP,
+        compile::START_IN_CHAIN,
+        compile::VALUE_AS_STEP,
+        compile::EMPTY_PIN,
+        compile::DATA_LOOP,
+        compile::NOT_A_VALUE,
+        compile::NO_SUCH_VAR,
+    ];
+
     /// Compile something broken and hand back what the user would read.
     fn problems(build: impl Fn(&mut Graph)) -> Vec<Diagnostic> {
         let mut g = reference_graph(20);
@@ -353,7 +367,8 @@ mod diagnostic_tests {
     fn every_code_is_used_by_exactly_one_kind_of_problem() {
         // Two problems sharing a code would make the code useless as a handle: someone
         // searching for it would find an explanation of the wrong thing.
-        let all = [
+        let all = ALL_CODES;
+        let _ = [
             compile::NO_START,
             compile::MANY_STARTS,
             compile::EXEC_LOOP,
@@ -372,6 +387,38 @@ mod diagnostic_tests {
     }
 
     #[test]
+    fn every_code_states_its_rule() {
+        // A code with no rule renders without the line, silently. Listing them here
+        // means adding a code without explaining it fails loudly instead.
+        for code in ALL_CODES {
+            let rule = code.rule();
+            assert!(
+                !rule.is_empty(),
+                "{} has no rule written for it",
+                code.render()
+            );
+            assert!(
+                rule.ends_with('.') && rule.len() > 25,
+                "{} reads oddly: {rule:?}",
+                code.render()
+            );
+            // The rule describes the language, so it must not talk about one instance.
+            // Matched as whole words: "There is no default" is fine, "here" is not.
+            let words: Vec<String> = rule
+                .split(|c: char| !c.is_alphanumeric())
+                .map(|w| w.to_lowercase())
+                .collect();
+            for banned in ["here", "this", "expr", "nodeid"] {
+                assert!(
+                    !words.iter().any(|w| w == banned),
+                    "{} states an instance, not a rule: {rule:?}",
+                    code.render()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn both_backends_report_the_same_problem() {
         // The bytecode compiler and the WebAssembly compiler each walk the graph, so a
         // broken program has to be refused by both — not compiled by one of them.
@@ -384,4 +431,5 @@ mod diagnostic_tests {
         assert_eq!(bytecode[0].code, wasm[0].code);
     }
 }
+
 

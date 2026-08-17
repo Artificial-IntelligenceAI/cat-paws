@@ -527,10 +527,25 @@ impl CatPaws {
                 let mut jump_to: Option<NodeId> = None;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if !self.diagnostics.is_empty() {
-                        for d in &self.diagnostics {
+                        let show_rule = rules_to_show(&self.diagnostics);
+                        for (i, d) in self.diagnostics.iter().enumerate() {
                             // What went wrong, then what to do about it. The second line
                             // is quieter so the eye reads the problem first, but it is
                             // always there — a beginner needs it more than the first.
+                            let code = d.code.render();
+                            let rule = d.code.rule();
+                            if show_rule[i] {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.add_space(10.0);
+                                    ui.add(egui::Label::new(
+                                        RichText::new(format!("the rule: {rule}"))
+                                            .size(12.5)
+                                            .italics()
+                                            .color(palette.text_faint),
+                                    ));
+                                });
+                            }
+
                             let clickable = d.node.is_some();
                             let label = ui.add(
                                 egui::Label::new(
@@ -577,7 +592,7 @@ impl CatPaws {
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
                                 ui.add(egui::Label::new(
-                                    RichText::new(d.code.render())
+                                    RichText::new(code)
                                         .size(11.0)
                                         .monospace()
                                         .color(palette.text_faint),
@@ -877,5 +892,54 @@ mod centre_tests {
                 "zoom {zoom}: landed at {on_screen:?}"
             );
         }
+    }
+}
+
+/// Which diagnostics should carry their rule.
+///
+/// The first time a code appears in a run, and not on repeats. Meeting a rule once
+/// teaches it; eight copies of the same paragraph is a wall to scroll past.
+///
+/// Pure, so the behaviour is testable without a window.
+pub(crate) fn rules_to_show(diagnostics: &[Diagnostic]) -> Vec<bool> {
+    let mut seen: Vec<String> = Vec::new();
+    diagnostics
+        .iter()
+        .map(|d| {
+            let code = d.code.render();
+            if d.code.rule().is_empty() || seen.contains(&code) {
+                false
+            } else {
+                seen.push(code);
+                true
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod rule_display_tests {
+    use super::*;
+    use cat_paws_core::compile::{EMPTY_PIN, NO_START, NO_SUCH_VAR};
+
+    fn diag(code: cat_paws_core::Code) -> Diagnostic {
+        Diagnostic::global(code, "something", "do something")
+    }
+
+    #[test]
+    fn a_rule_is_stated_once_per_run() {
+        let diags = [diag(EMPTY_PIN), diag(EMPTY_PIN), diag(EMPTY_PIN)];
+        assert_eq!(rules_to_show(&diags), vec![true, false, false]);
+    }
+
+    #[test]
+    fn each_different_code_gets_its_own_rule() {
+        let diags = [
+            diag(EMPTY_PIN),
+            diag(NO_START),
+            diag(EMPTY_PIN),
+            diag(NO_SUCH_VAR),
+        ];
+        assert_eq!(rules_to_show(&diags), vec![true, true, false, true]);
     }
 }
