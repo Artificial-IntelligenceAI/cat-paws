@@ -9,7 +9,7 @@ pub mod types;
 pub mod vm;
 pub mod wasm;
 
-pub use compile::{compile, Diagnostic, Expr, Instr, Program};
+pub use compile::{compile, Area, Code, Diagnostic, Expr, Instr, Program};
 pub use graph::{Category, Graph, Link, Node, NodeId, NodeKind, Pin, PinKind, PinRef, Side};
 pub use types::{DataType, Value};
 pub use vm::{run, RunResult};
@@ -343,6 +343,35 @@ mod diagnostic_tests {
     }
 
     #[test]
+    fn a_code_reads_the_way_it_is_meant_to() {
+        assert_eq!(compile::EMPTY_PIN.render(), "CP-WIRE-01");
+        assert_eq!(compile::NO_START.render(), "CP-FLOW-01");
+        assert_eq!(compile::NO_SUCH_VAR.render(), "CP-NAME-01");
+    }
+
+    #[test]
+    fn every_code_is_used_by_exactly_one_kind_of_problem() {
+        // Two problems sharing a code would make the code useless as a handle: someone
+        // searching for it would find an explanation of the wrong thing.
+        let all = [
+            compile::NO_START,
+            compile::MANY_STARTS,
+            compile::EXEC_LOOP,
+            compile::START_IN_CHAIN,
+            compile::VALUE_AS_STEP,
+            compile::EMPTY_PIN,
+            compile::DATA_LOOP,
+            compile::NOT_A_VALUE,
+            compile::NO_SUCH_VAR,
+        ];
+        let mut seen: Vec<String> = all.iter().map(|c| c.render()).collect();
+        seen.sort();
+        let count = seen.len();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "two problems share a code");
+    }
+
+    #[test]
     fn both_backends_report_the_same_problem() {
         // The bytecode compiler and the WebAssembly compiler each walk the graph, so a
         // broken program has to be refused by both — not compiled by one of them.
@@ -352,6 +381,7 @@ mod diagnostic_tests {
         assert_eq!(bytecode.len(), wasm.len());
         assert_eq!(bytecode[0].message, wasm[0].message);
         assert_eq!(bytecode[0].fix, wasm[0].fix);
+        assert_eq!(bytecode[0].code, wasm[0].code);
     }
 }
 

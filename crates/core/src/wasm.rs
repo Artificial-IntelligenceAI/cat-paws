@@ -41,7 +41,10 @@ use wasm_encoder::{
     Module, TypeSection, ValType,
 };
 
-use crate::compile::{Diagnostic, Expr, Values};
+use crate::compile::{
+    Diagnostic, Expr, Values, EXEC_LOOP, MANY_STARTS, NO_START, NO_SUCH_VAR, START_IN_CHAIN,
+    VALUE_AS_STEP,
+};
 use crate::graph::{Graph, NodeId, NodeKind, PinRef, Side};
 use crate::types::{DataType, Value};
 
@@ -144,6 +147,7 @@ impl<'a> Emitter<'a> {
     fn walk_node(&mut self, id: NodeId) {
         if self.exec_path.contains(&id) {
             self.diags.push(Diagnostic::at(
+                EXEC_LOOP,
                 id,
                 "the execution wires lead back to a node they already passed through, so this program would never finish",
                 "break the loop by unplugging one of the grey wires — repeating a step is not supported yet",
@@ -170,6 +174,7 @@ impl<'a> Emitter<'a> {
                     Some(index) => self.body.push(Instruction::LocalSet(*index)),
                     None => {
                         self.diags.push(Diagnostic::at(
+                NO_SUCH_VAR,
                             id,
                             format!("there is no variable called '{name}'"),
                             "add it in the Variables panel, or pick a different one on this node",
@@ -192,6 +197,7 @@ impl<'a> Emitter<'a> {
             }
             NodeKind::EventStart => {
                 self.diags.push(Diagnostic::at(
+                START_IN_CHAIN,
                     id,
                     "an Event start is where the program begins, so it cannot also be a step in the middle of one",
                     "unplug the grey wire going into this node",
@@ -199,6 +205,7 @@ impl<'a> Emitter<'a> {
             }
             other => {
                 self.diags.push(Diagnostic::at(
+                VALUE_AS_STEP,
                     id,
                     format!(
                         "{} produces a value, so it cannot sit in the grey execution chain",
@@ -235,6 +242,7 @@ impl<'a> Emitter<'a> {
                 Some(index) => self.body.push(Instruction::LocalGet(*index)),
                 None => {
                     self.diags.push(Diagnostic::global(
+                NO_SUCH_VAR,
                         format!("there is no variable called '{name}'"),
                         "add it in the Variables panel, or pick a different one on this node",
                     ));
@@ -320,6 +328,7 @@ fn entry_point(graph: &Graph) -> Result<NodeId, Vec<Diagnostic>> {
 
     match starts.as_slice() {
         [] => Err(vec![Diagnostic::global(
+                NO_START,
             "there is no Event start node, so nothing says where the program begins",
             "right-click the canvas and add an Event start, then wire it to the first step",
         )]),
@@ -328,6 +337,7 @@ fn entry_point(graph: &Graph) -> Result<NodeId, Vec<Diagnostic>> {
             .iter()
             .map(|id| {
                 Diagnostic::at(
+                MANY_STARTS,
                     *id,
                     "there is more than one Event start node, so it is unclear which one begins the program",
                     "delete all but one of them",

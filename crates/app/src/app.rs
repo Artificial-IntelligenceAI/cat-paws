@@ -571,6 +571,18 @@ impl CatPaws {
                                     ));
                                 });
                             }
+                            // The code is a handle to search for or look up, so it is
+                            // present but quiet — a beginner reads the sentence, and
+                            // only needs this when they want to go and find out more.
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.add(egui::Label::new(
+                                    RichText::new(d.code.render())
+                                        .size(11.0)
+                                        .monospace()
+                                        .color(palette.text_faint),
+                                ));
+                            });
                             ui.add_space(3.0);
                         }
                         ui.add_space(6.0);

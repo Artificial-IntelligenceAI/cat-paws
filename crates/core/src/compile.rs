@@ -9,6 +9,70 @@ use crate::graph::{Graph, NodeId, NodeKind, PinRef, Side};
 use crate::types::{DataType, Value};
 use std::collections::BTreeMap;
 
+/// Which part of the language a problem belongs to.
+///
+/// Named after what the user sees on screen, not after compiler phases: the grey
+/// execution chain, the coloured data wires, and the variables panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Area {
+    /// The grey wires — the order steps happen in.
+    Flow,
+    /// The coloured wires — values travelling between pins.
+    Wire,
+    /// Variables.
+    Name,
+}
+
+impl Area {
+    fn as_str(self) -> &'static str {
+        match self {
+            Area::Flow => "FLOW",
+            Area::Wire => "WIRE",
+            Area::Name => "NAME",
+        }
+    }
+}
+
+/// A stable name for one kind of problem, like `CP-WIRE-01`.
+///
+/// Stable is the point: it can be searched for, linked to, and eventually hung with an
+/// explanation of the rule behind it. The wording of a message may improve; the code it
+/// carries should not change under it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Code {
+    pub area: Area,
+    pub number: u8,
+}
+
+impl Code {
+    pub const fn new(area: Area, number: u8) -> Code {
+        Code { area, number }
+    }
+
+    pub fn render(self) -> String {
+        format!("CP-{}-{:02}", self.area.as_str(), self.number)
+    }
+}
+
+/// No Event start node, so nothing says where to begin.
+pub const NO_START: Code = Code::new(Area::Flow, 1);
+/// More than one Event start node.
+pub const MANY_STARTS: Code = Code::new(Area::Flow, 2);
+/// Execution wires lead back on themselves.
+pub const EXEC_LOOP: Code = Code::new(Area::Flow, 3);
+/// An Event start wired into the middle of a chain.
+pub const START_IN_CHAIN: Code = Code::new(Area::Flow, 4);
+/// A value node placed in the execution chain.
+pub const VALUE_AS_STEP: Code = Code::new(Area::Flow, 5);
+/// An input pin with nothing wired into it.
+pub const EMPTY_PIN: Code = Code::new(Area::Wire, 1);
+/// Data wires lead back on themselves.
+pub const DATA_LOOP: Code = Code::new(Area::Wire, 2);
+/// Something in a value position that produces no value.
+pub const NOT_A_VALUE: Code = Code::new(Area::Wire, 3);
+/// A node refers to a variable that does not exist.
+pub const NO_SUCH_VAR: Code = Code::new(Area::Name, 1);
+
 /// A problem found while compiling.
 ///
 /// Two separate sentences, deliberately. `message` says what is wrong; `fix` says what to
@@ -20,22 +84,30 @@ use std::collections::BTreeMap;
 /// which is this language's equivalent of a line number.
 #[derive(Clone, Debug)]
 pub struct Diagnostic {
+    pub code: Code,
     pub node: Option<NodeId>,
     pub message: String,
     pub fix: String,
 }
 
 impl Diagnostic {
-    pub fn at(node: NodeId, message: impl Into<String>, fix: impl Into<String>) -> Diagnostic {
+    pub fn at(
+        code: Code,
+        node: NodeId,
+        message: impl Into<String>,
+        fix: impl Into<String>,
+    ) -> Diagnostic {
         Diagnostic {
+            code,
             node: Some(node),
             message: message.into(),
             fix: fix.into(),
         }
     }
 
-    pub fn global(message: impl Into<String>, fix: impl Into<String>) -> Diagnostic {
+    pub fn global(code: Code, message: impl Into<String>, fix: impl Into<String>) -> Diagnostic {
         Diagnostic {
+            code,
             node: None,
             message: message.into(),
             fix: fix.into(),
@@ -106,6 +178,7 @@ pub fn compile(graph: &Graph) -> Result<Program, Vec<Diagnostic>> {
     let start = match starts.as_slice() {
         [] => {
             return Err(vec![Diagnostic::global(
+                NO_START,
                 "there is no Event start node, so nothing says where the program begins",
                 "right-click the canvas and add an Event start, then wire it to the first step",
             )])
@@ -116,6 +189,7 @@ pub fn compile(graph: &Graph) -> Result<Program, Vec<Diagnostic>> {
                 .iter()
                 .map(|id| {
                     Diagnostic::at(
+                MANY_STARTS,
                         *id,
                         "there is more than one Event start node, so it is unclear which one begins the program",
                         "delete all but one of them",
@@ -198,6 +272,7 @@ impl<'a> Compiler<'a> {
     fn emit_node(&mut self, id: NodeId) {
         if self.exec_path.contains(&id) {
             self.diags.push(Diagnostic::at(
+                EXEC_LOOP,
                 id,
                 "the execution wires lead back to a node they already passed through, so this program would never finish",
                 "break the loop by unplugging one of the grey wires — repeating a step is not supported yet",
@@ -248,6 +323,7 @@ impl<'a> Compiler<'a> {
             }
             NodeKind::EventStart => {
                 self.diags.push(Diagnostic::at(
+                START_IN_CHAIN,
                     id,
                     "an Event start is where the program begins, so it cannot also be a step in the middle of one",
                     "unplug the grey wire going into this node",
@@ -255,6 +331,7 @@ impl<'a> Compiler<'a> {
             }
             other => {
                 self.diags.push(Diagnostic::at(
+                VALUE_AS_STEP,
                     id,
                     format!(
                         "{} produces a value, so it cannot sit in the grey execution chain",
@@ -292,6 +369,7 @@ impl<'a> Values<'a> {
                 .map(|k| k.title())
                 .unwrap_or_default();
             self.diags.push(Diagnostic::at(
+                EMPTY_PIN,
                 node,
                 format!("'{pin_name}' on {title} has nothing wired into it, so there is no value to use"),
                 format!(
@@ -310,6 +388,7 @@ impl<'a> Values<'a> {
         let id = source.node;
         if self.data_path.contains(&id) {
             self.diags.push(Diagnostic::at(
+                DATA_LOOP,
                 id,
                 "this value is worked out from itself, going round in a circle for ever",
                 "unplug one of the coloured wires in the loop",
@@ -330,6 +409,7 @@ impl<'a> Values<'a> {
                 if !self.graph.vars.contains_key(name) {
                     self.diags
                         .push(Diagnostic::at(
+                NO_SUCH_VAR,
                             id,
                             format!("there is no variable called '{name}'"),
                             "add it in the Variables panel, or pick a different one on this node",
@@ -344,6 +424,7 @@ impl<'a> Values<'a> {
             }
             other => {
                 self.diags.push(Diagnostic::at(
+                NOT_A_VALUE,
                     id,
                     format!("{} does not produce a value, so nothing can read from it", other.title()),
                     "wire a value node into this pin instead",
