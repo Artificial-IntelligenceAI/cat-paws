@@ -16,7 +16,16 @@ log = "0.4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11"
+# Hosts the compiled module natively. Never built for the web target, where the
+# browser's own engine does the same job.
+wasmtime = { version = "38", default-features = false, features = [
+    "cranelift",
+    "runtime",
+    "std",
+] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Document", "Window", "Element"] }

@@ -4,7 +4,7 @@
     {
       "name": "cat-paws-web",
       "runtimeExecutable": "trunk",
-      "runtimeArgs": ["serve", "--config", "crates/app/Trunk.toml"],
+      "runtimeArgs": ["serve", "crates/app/index.html"],
       "port": 8080
     }
   ]

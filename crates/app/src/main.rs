@@ -5,6 +5,7 @@
 mod app;
 mod canvas;
 mod icons;
+mod runner;
 mod theme;
 
 pub use app::CatPaws;

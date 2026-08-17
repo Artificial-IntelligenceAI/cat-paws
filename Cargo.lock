@@ -307,8 +307,11 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "js-sys",
  "log",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasmtime",
  "web-sys",
 ]
 

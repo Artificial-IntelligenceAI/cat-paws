@@ -4,7 +4,7 @@ use crate::canvas::{Interaction, View};
 use crate::icons::{icon_button, Icon};
 use crate::theme::{Mode, Palette};
 use cat_paws_core::compile::{compile as compile_graph, Diagnostic, Program};
-use cat_paws_core::{vm, Category, DataType, Graph, NodeId, NodeKind, PinRef, Side, Value};
+use cat_paws_core::{Category, DataType, Graph, NodeId, NodeKind, PinRef, Side, Value};
 use egui::{Rect, RichText};
 use std::collections::HashSet;
 
@@ -25,6 +25,8 @@ pub struct CatPaws {
     pub mode: Mode,
 
     pub program: Option<Program>,
+    /// The module the hammer produced. This is what runs.
+    pub wasm: Option<Vec<u8>>,
     pub diagnostics: Vec<Diagnostic>,
     pub output: Vec<String>,
     pub status: Status,
@@ -62,6 +64,7 @@ impl CatPaws {
             selected: None,
             mode: Mode::Dark,
             program: None,
+            wasm: None,
             diagnostics: Vec::new(),
             output: Vec::new(),
             status: Status::Stale("not compiled yet".to_string()),
@@ -110,6 +113,7 @@ impl CatPaws {
         self.interaction = Interaction::Idle;
 
         self.program = None;
+        self.wasm = None;
         let left = self.undo_stack.len();
         self.status = Status::Stale(format!(
             "undone — {left} step{} left",
@@ -120,6 +124,7 @@ impl CatPaws {
     /// Called whenever the graph changes: the last compile no longer describes it.
     pub(crate) fn mark_stale(&mut self) {
         self.program = None;
+        self.wasm = None;
         self.status = Status::Stale("graph changed — compile again".to_string());
     }
 
@@ -133,20 +138,22 @@ impl CatPaws {
     }
 
     fn compile(&mut self) -> bool {
-        match compile_graph(&self.graph) {
-            Ok(program) => {
-                let count = program.instrs.len();
-                self.program = Some(program);
+        // Both backends run. The WebAssembly module is what actually executes; the
+        // bytecode feeds the listing panel and stays available as a second opinion,
+        // since two implementations are rarely wrong the same way.
+        match cat_paws_core::wasm::emit(&self.graph) {
+            Ok(bytes) => {
+                let size = bytes.len();
+                self.wasm = Some(bytes);
+                self.program = compile_graph(&self.graph).ok();
                 self.diagnostics.clear();
-                self.status = Status::Ok(format!(
-                    "compiled — {count} instruction{}",
-                    if count == 1 { "" } else { "s" }
-                ));
+                self.status = Status::Ok(format!("compiled — {size} bytes of WebAssembly"));
                 true
             }
             Err(diags) => {
                 let count = diags.len();
                 self.program = None;
+                self.wasm = None;
                 self.diagnostics = diags;
                 self.status = Status::Failed(format!(
                     "{count} problem{} — nothing to run",
@@ -161,15 +168,14 @@ impl CatPaws {
         if !self.compile() {
             return;
         }
-        let Some(program) = &self.program else { return };
-        let result = vm::run(program);
-        self.output = result.output;
-        self.status = match result.error {
+        let Some(bytes) = self.wasm.clone() else { return };
+        let outcome = crate::runner::run(&bytes);
+        self.output = outcome.output;
+        self.status = match outcome.error {
             Some(err) => Status::Failed(format!("stopped: {err}")),
             None => Status::Ok(format!(
-                "ran {} step{}, printed {} line{}",
-                result.steps,
-                if result.steps == 1 { "" } else { "s" },
+                "ran {} bytes of WebAssembly, printed {} line{}",
+                bytes.len(),
                 self.output.len(),
                 if self.output.len() == 1 { "" } else { "s" }
             )),
