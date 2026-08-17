@@ -298,29 +298,26 @@ fn quoted(line: usize, text: &str) -> Result<String, Problem> {
 /// `* /`, which is the order everyone already expects.
 fn parse_expr(line: usize, text: &str) -> Result<Expr, Problem> {
     let text = text.trim();
-    if let Some((a, b)) = split_operator(text, &["<"]) {
+    if let Some((a, _, b)) = split_level(text, &[("<", ArithOp::Add)]) {
         return Ok(Expr::LessThan(
             Box::new(parse_expr(line, a)?),
             Box::new(parse_expr(line, b)?),
         ));
     }
-    for (symbols, op) in [
-        (["+"].as_slice(), ArithOp::Add),
-        (["-"].as_slice(), ArithOp::Subtract),
+    // Both operators of a level are searched together. Splitting on every `*` first and
+    // only then on `/` would read `a * b / c` as `a * (b / c)` — which for whole numbers
+    // is a different answer, not just a different shape: 6 * 3 / 2 would be 6, not 9.
+    for level in [
+        [("+", ArithOp::Add), ("-", ArithOp::Subtract)].as_slice(),
+        [
+            ("*", ArithOp::Multiply),
+            ("×", ArithOp::Multiply),
+            ("/", ArithOp::Divide),
+            ("÷", ArithOp::Divide),
+        ]
+        .as_slice(),
     ] {
-        if let Some((a, b)) = split_operator(text, symbols) {
-            return Ok(Expr::Arith(
-                op,
-                Box::new(parse_expr(line, a)?),
-                Box::new(parse_expr(line, b)?),
-            ));
-        }
-    }
-    for (symbols, op) in [
-        (["*", "×"].as_slice(), ArithOp::Multiply),
-        (["/", "÷"].as_slice(), ArithOp::Divide),
-    ] {
-        if let Some((a, b)) = split_operator(text, symbols) {
+        if let Some((a, op, b)) = split_level(text, level) {
             return Ok(Expr::Arith(
                 op,
                 Box::new(parse_expr(line, a)?),
@@ -331,20 +328,26 @@ fn parse_expr(line: usize, text: &str) -> Result<Expr, Problem> {
     parse_atom(line, text)
 }
 
-/// Split on the *last* occurrence, so `a - b - c` groups as `(a - b) - c`.
-fn split_operator<'a>(text: &'a str, symbols: &[&str]) -> Option<(&'a str, &'a str)> {
-    let mut best: Option<usize> = None;
-    let mut width = 0;
+/// Split on the *last* operator of this level, so `a - b - c` groups as `(a - b) - c`.
+fn split_level<'a>(
+    text: &'a str,
+    level: &[(&str, ArithOp)],
+) -> Option<(&'a str, ArithOp, &'a str)> {
+    let mut best: Option<(usize, usize, ArithOp)> = None;
     for (i, _) in text.char_indices() {
-        for sym in symbols {
-            if text[i..].starts_with(sym) && i > 0 && !inside_quotes(text, i) {
-                best = Some(i);
-                width = sym.len();
+        // `i > 0` leaves a leading minus alone, and a quoted `-` belongs to the literal
+        // it is part of, as in integer '-4'.
+        if i == 0 || inside_quotes(text, i) {
+            continue;
+        }
+        for (symbol, op) in level {
+            if text[i..].starts_with(symbol) {
+                best = Some((i, symbol.len(), *op));
             }
         }
     }
-    let at = best?;
-    Some((&text[..at], &text[at + width..]))
+    let (at, width, op) = best?;
+    Some((&text[..at], op, &text[at + width..]))
 }
 
 fn inside_quotes(text: &str, at: usize) -> bool {

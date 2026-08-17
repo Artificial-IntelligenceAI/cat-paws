@@ -969,3 +969,48 @@ mod repeat_tests {
         assert!(problems[0].message.contains("nothing can follow an `if`"));
     }
 }
+
+#[cfg(test)]
+mod precedence_tests {
+    use super::wasm_tests::run_wasm;
+    use super::*;
+
+    fn ran(text: &str) -> Vec<String> {
+        let mut g = Graph::new();
+        written::generate(&mut g, text).unwrap_or_else(|p| panic!("should read: {p:#?}"));
+        run_wasm(&wasm::emit(&g).unwrap_or_else(|d| panic!("should compile: {d:#?}")))
+    }
+
+    /// Whole-number division truncates, so grouping is not cosmetic here: reading this
+    /// right to left gives 6 * (3 / 2) = 6, and left to right gives (6 * 3) / 2 = 9.
+    #[test]
+    fn multiply_and_divide_group_left_to_right() {
+        assert_eq!(ran("print integer '6' * integer '3' / integer '2'"), ["9"]);
+        assert_eq!(ran("print integer '6' / integer '2' * integer '3'"), ["9"]);
+    }
+
+    #[test]
+    fn add_and_subtract_group_left_to_right() {
+        assert_eq!(ran("print integer '10' - integer '4' + integer '3'"), ["9"]);
+        assert_eq!(ran("print integer '10' - integer '4' - integer '3'"), ["3"]);
+    }
+
+    #[test]
+    fn multiplying_binds_tighter_than_adding() {
+        assert_eq!(ran("print integer '10' - integer '4' * integer '2'"), ["2"]);
+    }
+
+    #[test]
+    fn a_negative_literal_is_not_a_subtraction() {
+        assert_eq!(ran("print integer '-4' + integer '1'"), ["-3"]);
+    }
+
+    /// The reduction step the benchmark kernel leans on: x - (x / m) * m.
+    #[test]
+    fn the_remainder_idiom_groups_correctly() {
+        assert_eq!(
+            ran("print integer '1000000007' - integer '1000000007' / integer '1000003' * integer '1000003'"),
+            ["997010"]
+        );
+    }
+}
