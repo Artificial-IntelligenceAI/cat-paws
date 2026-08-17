@@ -56,7 +56,7 @@ impl CatPaws {
     }
 
     /// The initial state, with no egui context involved so tests can build one.
-    fn fresh() -> Self {
+    pub(crate) fn fresh() -> Self {
         CatPaws {
             graph: sample_graph(),
             view: View::default(),
@@ -130,6 +130,20 @@ impl CatPaws {
 
     pub(crate) fn set_wire_error(&mut self, message: &str) {
         self.status = Status::Failed(message.to_string());
+    }
+
+    /// Bring a node into the middle of the view.
+    ///
+    /// Selecting it is not enough on its own: the node a diagnostic points at is often
+    /// off-screen, which is exactly when the reader needs help finding it, and a click
+    /// that highlights something they cannot see looks like a click that did nothing.
+    pub(crate) fn centre_on(&mut self, id: NodeId) {
+        let Some(node) = self.graph.node(id) else { return };
+        let size = crate::canvas::node_size(&node.kind);
+        let middle = egui::vec2(node.pos.0 + size.x / 2.0, node.pos.1 + size.y / 2.0);
+        // to_screen is `rect.min + pan + world * zoom`, so the pan that puts `middle` at
+        // the centre of the canvas is the centre offset minus the scaled world position.
+        self.view.pan = self.last_canvas.size() / 2.0 - middle * self.view.zoom;
     }
 
     /// Nodes the last compile complained about, so the canvas can outline them.
@@ -517,14 +531,35 @@ impl CatPaws {
                             // What went wrong, then what to do about it. The second line
                             // is quieter so the eye reads the problem first, but it is
                             // always there — a beginner needs it more than the first.
+                            let clickable = d.node.is_some();
                             let label = ui.add(
                                 egui::Label::new(
                                     RichText::new(format!("• {}", d.message)).color(palette.error),
                                 )
-                                .sense(egui::Sense::click()),
+                                .sense(if clickable {
+                                    egui::Sense::click()
+                                } else {
+                                    egui::Sense::hover()
+                                }),
                             );
-                            if label.clicked() {
-                                jump_to = d.node;
+                            if clickable {
+                                // A plain label gives no sign it can be clicked. The
+                                // pointer changes and the text underlines on hover, so
+                                // the link is discoverable rather than a secret.
+                                let label = label.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if label.hovered() {
+                                    let r = label.rect;
+                                    ui.painter().line_segment(
+                                        [
+                                            egui::pos2(r.left(), r.bottom() - 1.0),
+                                            egui::pos2(r.right(), r.bottom() - 1.0),
+                                        ],
+                                        egui::Stroke::new(1.0, palette.error),
+                                    );
+                                }
+                                if label.clicked() {
+                                    jump_to = d.node;
+                                }
                             }
                             if !d.fix.is_empty() {
                                 ui.horizontal(|ui| {
@@ -570,6 +605,7 @@ impl CatPaws {
 
                 if let Some(id) = jump_to {
                     self.selected = Some(id);
+                    self.centre_on(id);
                 }
             });
     }
@@ -775,5 +811,59 @@ mod tests {
         assert!(matches!(app.graph.pin_kind(to), Some(PinKind::Data(_))));
         assert!(app.graph.connect(from, to).is_err());
         assert!(!app.can_undo());
+    }
+}
+
+#[cfg(test)]
+mod centre_tests {
+    use super::*;
+    use cat_paws_core::{DataType, NodeKind};
+
+    /// Centring is pure arithmetic on the view, so it is testable without a window.
+    #[test]
+    fn centring_puts_a_node_in_the_middle_of_the_canvas() {
+        let mut app = CatPaws::fresh();
+        app.last_canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let far = app.graph.add_node(NodeKind::LitInt(1), (4000.0, 3000.0));
+
+        app.centre_on(far);
+
+        let node = app.graph.node(far).unwrap();
+        let size = crate::canvas::node_size(&node.kind);
+        let middle = egui::pos2(node.pos.0 + size.x / 2.0, node.pos.1 + size.y / 2.0);
+        let on_screen = app.view.to_screen(app.last_canvas, middle);
+        let want = app.last_canvas.center();
+        assert!(
+            (on_screen - want).length() < 0.5,
+            "expected the node at {want:?}, it landed at {on_screen:?}"
+        );
+    }
+
+    #[test]
+    fn centring_works_at_any_zoom() {
+        for zoom in [0.25_f32, 0.5, 1.0, 2.0] {
+            let mut app = CatPaws::fresh();
+            app.last_canvas =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+            app.view.zoom = zoom;
+            let id = app.graph.add_node(
+                NodeKind::GetVar {
+                    name: "x".into(),
+                    ty: DataType::Int,
+                },
+                (-900.0, 1200.0),
+            );
+
+            app.centre_on(id);
+
+            let node = app.graph.node(id).unwrap();
+            let size = crate::canvas::node_size(&node.kind);
+            let middle = egui::pos2(node.pos.0 + size.x / 2.0, node.pos.1 + size.y / 2.0);
+            let on_screen = app.view.to_screen(app.last_canvas, middle);
+            assert!(
+                (on_screen - app.last_canvas.center()).length() < 0.5,
+                "zoom {zoom}: landed at {on_screen:?}"
+            );
+        }
     }
 }
