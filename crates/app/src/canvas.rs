@@ -130,11 +130,13 @@ impl CatPaws {
         self.handle_zoom(ui, rect);
         self.draw_grid(&painter, rect, &palette);
 
+        // The hovered pin drives highlighting and the drag preview only. Anything
+        // that acts on a press hit-tests the press position instead — see
+        // `handle_interaction`.
         let pointer = ui.input(|i| i.pointer.hover_pos());
         let hovered_pin = pointer.and_then(|p| self.pin_at(rect, p));
-        let hovered_node = pointer.and_then(|p| self.node_at(rect, p));
 
-        self.handle_interaction(ui, &response, rect, hovered_pin, hovered_node);
+        self.handle_interaction(ui, &response, rect);
         self.draw_wires(&painter, rect, &palette);
         self.draw_pending_wire(&painter, rect, &palette, pointer, hovered_pin);
         self.draw_nodes(&painter, rect, &palette, hovered_pin);
@@ -234,45 +236,48 @@ impl CatPaws {
         found
     }
 
-    fn handle_interaction(
-        &mut self,
-        ui: &Ui,
-        response: &egui::Response,
-        rect: Rect,
-        hovered_pin: Option<PinRef>,
-        hovered_node: Option<NodeId>,
-    ) {
+    /// All hit-testing here uses [`egui::Response::interact_pointer_pos`] — the
+    /// position of the pointer *in this interaction* — rather than the hovered
+    /// position. What you grabbed has to be decided where the button went down:
+    /// if a press, move and release all land in one frame (a fast drag, or a
+    /// synthetic one), the hover position is already at the release point, and
+    /// hit-testing there grabs the wrong node or misses entirely and pans.
+    fn handle_interaction(&mut self, ui: &Ui, response: &egui::Response, rect: Rect) {
         let alt = ui.input(|i| i.modifiers.alt);
+        let pointer = response.interact_pointer_pos();
 
-        // Alt-click a pin to cut every wire attached to it.
-        if response.clicked() && alt {
-            if let Some(pin) = hovered_pin {
-                self.graph.disconnect_pin(pin);
-                self.mark_stale();
-                return;
+        if response.clicked() {
+            if let Some(p) = pointer {
+                // Alt-click a pin to cut every wire attached to it.
+                if alt {
+                    if let Some(pin) = self.pin_at(rect, p) {
+                        self.graph.disconnect_pin(pin);
+                        self.mark_stale();
+                        return;
+                    }
+                }
+                self.selected = self.node_at(rect, p);
             }
         }
 
-        if response.clicked() {
-            self.selected = hovered_node;
-        }
-
         if response.drag_started() {
-            self.interaction = if let Some(pin) = hovered_pin {
-                Interaction::DragWire { origin: pin }
-            } else if let Some(id) = hovered_node {
-                self.selected = Some(id);
-                let node_pos = self.graph.node(id).map(|n| n.pos).unwrap_or((0.0, 0.0));
-                let world = response
-                    .interact_pointer_pos()
-                    .map(|p| self.view.to_world(rect, p))
-                    .unwrap_or_default();
-                Interaction::DragNode {
-                    id,
-                    grab: world - pos2(node_pos.0, node_pos.1),
+            self.interaction = match pointer {
+                Some(p) => {
+                    if let Some(pin) = self.pin_at(rect, p) {
+                        Interaction::DragWire { origin: pin }
+                    } else if let Some(id) = self.node_at(rect, p) {
+                        self.selected = Some(id);
+                        let node_pos = self.graph.node(id).map(|n| n.pos).unwrap_or((0.0, 0.0));
+                        let world = self.view.to_world(rect, p);
+                        Interaction::DragNode {
+                            id,
+                            grab: world - pos2(node_pos.0, node_pos.1),
+                        }
+                    } else {
+                        Interaction::Panning
+                    }
                 }
-            } else {
-                Interaction::Panning
+                None => Interaction::Panning,
             };
         }
 
@@ -293,7 +298,8 @@ impl CatPaws {
 
         if response.drag_stopped() {
             if let Interaction::DragWire { origin } = self.interaction {
-                if let Some(target) = hovered_pin {
+                // The drop target is decided at the release point.
+                if let Some(target) = pointer.and_then(|p| self.pin_at(rect, p)) {
                     // Orient the pair so `from` is the output and `to` the input,
                     // whichever end the drag began at.
                     let (from, to) = match (origin.side, target.side) {
@@ -560,5 +566,103 @@ impl CatPaws {
             FontId::proportional(11.0),
             palette.text_faint,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cat_paws_core::NodeKind;
+
+    fn canvas_rect() -> Rect {
+        Rect::from_min_size(pos2(220.0, 60.0), vec2(900.0, 700.0))
+    }
+
+    /// Screen and world coordinates must be exact inverses, or hit-testing
+    /// drifts away from what is drawn as soon as the view is panned or zoomed.
+    #[test]
+    fn screen_and_world_round_trip() {
+        let rect = canvas_rect();
+        for (pan, zoom) in [
+            (vec2(0.0, 0.0), 1.0_f32),
+            (vec2(60.0, 40.0), 1.0),
+            (vec2(-320.0, 175.5), 0.35),
+            (vec2(880.0, -640.0), 2.5),
+        ] {
+            let view = View { pan, zoom };
+            for world in [pos2(0.0, 0.0), pos2(330.0, 140.0), pos2(-90.5, 612.25)] {
+                let back = view.to_world(rect, view.to_screen(rect, world));
+                assert!(
+                    (back.x - world.x).abs() < 0.01 && (back.y - world.y).abs() < 0.01,
+                    "round trip failed at pan {pan:?} zoom {zoom}: {world:?} -> {back:?}"
+                );
+            }
+        }
+    }
+
+    /// Input pins sit on the left edge, output pins on the right, and every pin
+    /// stays inside the node's own box.
+    #[test]
+    fn pins_sit_on_the_node_edges() {
+        for kind in [
+            NodeKind::EventStart,
+            NodeKind::Branch,
+            NodeKind::Print,
+            NodeKind::LessThan,
+            NodeKind::LitInt(7),
+        ] {
+            let size = node_size(&kind);
+            for (side, pins) in [
+                (Side::In, kind.inputs()),
+                (Side::Out, kind.outputs()),
+            ] {
+                for index in 0..pins.len() {
+                    let offset = pin_offset(&kind, side, index);
+                    let expected_x = match side {
+                        Side::In => 0.0,
+                        Side::Out => NODE_WIDTH,
+                    };
+                    assert_eq!(offset.x, expected_x, "{kind:?} {side:?} pin {index}");
+                    assert!(
+                        offset.y > HEADER_H && offset.y < size.y,
+                        "{kind:?} {side:?} pin {index} at y={} escapes the node (height {})",
+                        offset.y,
+                        size.y
+                    );
+                }
+            }
+        }
+    }
+
+    /// A node has to be tall enough for whichever side has more pins.
+    #[test]
+    fn node_height_follows_the_busier_side() {
+        // Branch: 2 in (exec, condition) and 2 out (true, false).
+        assert_eq!(node_rows(&NodeKind::Branch), 2);
+        // Event start: nothing in, one exec out.
+        assert_eq!(node_rows(&NodeKind::EventStart), 1);
+        // Less than: two data inputs, one result out -- the inputs win.
+        assert_eq!(node_rows(&NodeKind::LessThan), 2);
+
+        assert!(node_size(&NodeKind::Branch).y > node_size(&NodeKind::EventStart).y);
+    }
+
+    /// Two pins on the same node must never land on the same point, or a drag
+    /// could not tell them apart.
+    #[test]
+    fn pins_on_a_node_are_distinct() {
+        let kind = NodeKind::Branch;
+        let mut seen: Vec<Vec2> = Vec::new();
+        for (side, pins) in [(Side::In, kind.inputs()), (Side::Out, kind.outputs())] {
+            for index in 0..pins.len() {
+                let offset = pin_offset(&kind, side, index);
+                assert!(
+                    !seen.iter().any(|s| (*s - offset).length() < 1.0),
+                    "duplicate pin position {offset:?}"
+                );
+                seen.push(offset);
+            }
+        }
+        assert_eq!(seen.len(), 4);
     }
 }

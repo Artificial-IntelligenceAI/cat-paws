@@ -76,3 +76,7 @@ layout from each node's pin list, so it needs no changes to draw or wire it.
 Solarized, light and dark. Solarized keeps its eight accent colours identical
 across both modes and swaps only the greys — so wire colours stay meaningful when
 you flip the theme.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
