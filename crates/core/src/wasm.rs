@@ -143,10 +143,11 @@ impl<'a> Emitter<'a> {
 
     fn walk_node(&mut self, id: NodeId) {
         if self.exec_path.contains(&id) {
-            self.diags.push(Diagnostic {
-                node: Some(id),
-                message: "execution wires form a loop; loops are not supported yet".into(),
-            });
+            self.diags.push(Diagnostic::at(
+                id,
+                "the execution wires lead back to a node they already passed through, so this program would never finish",
+                "break the loop by unplugging one of the grey wires — repeating a step is not supported yet",
+            ));
             return;
         }
         let Some(kind) = self.graph.kind_of(id).cloned() else {
@@ -168,10 +169,11 @@ impl<'a> Emitter<'a> {
                 match self.locals.get(name) {
                     Some(index) => self.body.push(Instruction::LocalSet(*index)),
                     None => {
-                        self.diags.push(Diagnostic {
-                            node: Some(id),
-                            message: format!("no variable named '{name}'"),
-                        });
+                        self.diags.push(Diagnostic::at(
+                            id,
+                            format!("there is no variable called '{name}'"),
+                            "add it in the Variables panel, or pick a different one on this node",
+                        ));
                         self.body.push(Instruction::Drop);
                     }
                 }
@@ -189,17 +191,21 @@ impl<'a> Emitter<'a> {
                 self.body.push(Instruction::End);
             }
             NodeKind::EventStart => {
-                self.diags.push(Diagnostic {
-                    node: Some(id),
-                    message: "Event start cannot appear in the middle of an execution chain"
-                        .into(),
-                });
+                self.diags.push(Diagnostic::at(
+                    id,
+                    "an Event start is where the program begins, so it cannot also be a step in the middle of one",
+                    "unplug the grey wire going into this node",
+                ));
             }
             other => {
-                self.diags.push(Diagnostic {
-                    node: Some(id),
-                    message: format!("{} is a value node and cannot be run as a step", other.title()),
-                });
+                self.diags.push(Diagnostic::at(
+                    id,
+                    format!(
+                        "{} produces a value, so it cannot sit in the grey execution chain",
+                        other.title()
+                    ),
+                    "wire it into a coloured input pin instead of a grey one",
+                ));
             }
         }
 
@@ -228,10 +234,10 @@ impl<'a> Emitter<'a> {
             Expr::GetVar(name) => match self.locals.get(name) {
                 Some(index) => self.body.push(Instruction::LocalGet(*index)),
                 None => {
-                    self.diags.push(Diagnostic {
-                        node: None,
-                        message: format!("no variable named '{name}'"),
-                    });
+                    self.diags.push(Diagnostic::global(
+                        format!("there is no variable called '{name}'"),
+                        "add it in the Variables panel, or pick a different one on this node",
+                    ));
                     self.body.push(Instruction::I32Const(0));
                 }
             },
@@ -313,16 +319,19 @@ fn entry_point(graph: &Graph) -> Result<NodeId, Vec<Diagnostic>> {
         .collect();
 
     match starts.as_slice() {
-        [] => Err(vec![Diagnostic {
-            node: None,
-            message: "no Event start node — add one to say where the program begins".into(),
-        }]),
+        [] => Err(vec![Diagnostic::global(
+            "there is no Event start node, so nothing says where the program begins",
+            "right-click the canvas and add an Event start, then wire it to the first step",
+        )]),
         [one] => Ok(*one),
         many => Err(many
             .iter()
-            .map(|id| Diagnostic {
-                node: Some(*id),
-                message: "more than one Event start node; keep only one".into(),
+            .map(|id| {
+                Diagnostic::at(
+                    *id,
+                    "there is more than one Event start node, so it is unclear which one begins the program",
+                    "delete all but one of them",
+                )
             })
             .collect()),
     }

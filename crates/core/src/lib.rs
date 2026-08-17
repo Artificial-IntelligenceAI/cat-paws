@@ -275,3 +275,83 @@ mod wasm_tests {
         assert!(diags[0].message.contains("Event start"), "{diags:?}");
     }
 }
+
+/// Every diagnostic should be able to stand in front of a beginner.
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::tests::{reference_graph, wire};
+    use super::*;
+
+    /// Compile something broken and hand back what the user would read.
+    fn problems(build: impl Fn(&mut Graph)) -> Vec<Diagnostic> {
+        let mut g = reference_graph(20);
+        build(&mut g);
+        match compile(&g) {
+            Ok(_) => Vec::new(),
+            Err(diags) => diags,
+        }
+    }
+
+    #[test]
+    fn every_problem_says_what_to_do_about_it() {
+        // A message that only names the fault leaves a beginner stuck. Whatever we
+        // report, there is a second sentence telling them what to change.
+        let cases: Vec<Vec<Diagnostic>> = vec![
+            problems(|g| {
+                // Nothing wired into a Print's text pin.
+                let extra = g.add_node(NodeKind::Print, (900.0, 0.0));
+                let start = g
+                    .nodes()
+                    .find(|n| n.kind == NodeKind::EventStart)
+                    .map(|n| n.id)
+                    .unwrap();
+                g.disconnect_pin(PinRef {
+                    node: start,
+                    side: Side::Out,
+                    index: 0,
+                });
+                wire(g, start, 0, extra, 0);
+            }),
+            problems(|g| {
+                g.add_node(NodeKind::EventStart, (900.0, 900.0));
+            }),
+            match compile(&Graph::new()) {
+                Ok(_) => Vec::new(),
+                Err(d) => d,
+            },
+        ];
+
+        for diags in cases {
+            assert!(!diags.is_empty(), "this case should have failed to compile");
+            for d in diags {
+                assert!(!d.fix.trim().is_empty(), "no fix offered for: {}", d.message);
+                assert!(
+                    !d.message.trim().is_empty(),
+                    "a diagnostic with no message is no use"
+                );
+                // Jargon a beginner has no way to look up.
+                for word in ["expr", "pin index", "NodeId", "unwrap", "panic"] {
+                    assert!(
+                        !d.message.contains(word) && !d.fix.contains(word),
+                        "internal wording leaked into a message: {} / {}",
+                        d.message,
+                        d.fix
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_backends_report_the_same_problem() {
+        // The bytecode compiler and the WebAssembly compiler each walk the graph, so a
+        // broken program has to be refused by both — not compiled by one of them.
+        let g = Graph::new();
+        let bytecode = compile(&g).err().expect("no start node");
+        let wasm = wasm::emit(&g).err().expect("no start node");
+        assert_eq!(bytecode.len(), wasm.len());
+        assert_eq!(bytecode[0].message, wasm[0].message);
+        assert_eq!(bytecode[0].fix, wasm[0].fix);
+    }
+}
+

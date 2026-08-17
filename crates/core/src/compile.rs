@@ -9,25 +9,36 @@ use crate::graph::{Graph, NodeId, NodeKind, PinRef, Side};
 use crate::types::{DataType, Value};
 use std::collections::BTreeMap;
 
-/// A problem found while compiling. `node` lets the editor highlight the culprit.
+/// A problem found while compiling.
+///
+/// Two separate sentences, deliberately. `message` says what is wrong; `fix` says what to
+/// do about it. Someone who already knows the language reads the first and stops; someone
+/// meeting it for the first time needs the second, and a single blended sentence tends to
+/// serve neither.
+///
+/// `node` is the third piece — the editor highlights it and the panel entry jumps to it —
+/// which is this language's equivalent of a line number.
 #[derive(Clone, Debug)]
 pub struct Diagnostic {
     pub node: Option<NodeId>,
     pub message: String,
+    pub fix: String,
 }
 
 impl Diagnostic {
-    fn at(node: NodeId, message: impl Into<String>) -> Diagnostic {
+    pub fn at(node: NodeId, message: impl Into<String>, fix: impl Into<String>) -> Diagnostic {
         Diagnostic {
             node: Some(node),
             message: message.into(),
+            fix: fix.into(),
         }
     }
 
-    fn global(message: impl Into<String>) -> Diagnostic {
+    pub fn global(message: impl Into<String>, fix: impl Into<String>) -> Diagnostic {
         Diagnostic {
             node: None,
             message: message.into(),
+            fix: fix.into(),
         }
     }
 }
@@ -95,14 +106,21 @@ pub fn compile(graph: &Graph) -> Result<Program, Vec<Diagnostic>> {
     let start = match starts.as_slice() {
         [] => {
             return Err(vec![Diagnostic::global(
-                "no Event start node — add one to say where the program begins",
+                "there is no Event start node, so nothing says where the program begins",
+                "right-click the canvas and add an Event start, then wire it to the first step",
             )])
         }
         [one] => *one,
         many => {
             return Err(many
                 .iter()
-                .map(|id| Diagnostic::at(*id, "more than one Event start node; keep only one"))
+                .map(|id| {
+                    Diagnostic::at(
+                        *id,
+                        "there is more than one Event start node, so it is unclear which one begins the program",
+                        "delete all but one of them",
+                    )
+                })
                 .collect())
         }
     };
@@ -181,7 +199,8 @@ impl<'a> Compiler<'a> {
         if self.exec_path.contains(&id) {
             self.diags.push(Diagnostic::at(
                 id,
-                "execution wires form a loop; loops are not supported yet",
+                "the execution wires lead back to a node they already passed through, so this program would never finish",
+                "break the loop by unplugging one of the grey wires — repeating a step is not supported yet",
             ));
             return;
         }
@@ -230,13 +249,18 @@ impl<'a> Compiler<'a> {
             NodeKind::EventStart => {
                 self.diags.push(Diagnostic::at(
                     id,
-                    "Event start cannot appear in the middle of an execution chain",
+                    "an Event start is where the program begins, so it cannot also be a step in the middle of one",
+                    "unplug the grey wire going into this node",
                 ));
             }
             other => {
                 self.diags.push(Diagnostic::at(
                     id,
-                    format!("{} is a value node and cannot be run as a step", other.title()),
+                    format!(
+                        "{} produces a value, so it cannot sit in the grey execution chain",
+                        other.title()
+                    ),
+                    "wire it into a coloured input pin instead of a grey one",
                 ));
             }
         }
@@ -269,7 +293,11 @@ impl<'a> Values<'a> {
                 .unwrap_or_default();
             self.diags.push(Diagnostic::at(
                 node,
-                format!("'{pin_name}' on {title} has nothing wired into it"),
+                format!("'{pin_name}' on {title} has nothing wired into it, so there is no value to use"),
+                format!(
+                    "wire something into '{pin_name}' — it takes {}",
+                    a_an(expected.label())
+                ),
             ));
             return Expr::Lit(expected.default_value());
         };
@@ -283,7 +311,8 @@ impl<'a> Values<'a> {
         if self.data_path.contains(&id) {
             self.diags.push(Diagnostic::at(
                 id,
-                "data wires form a loop; a value cannot depend on itself",
+                "this value is worked out from itself, going round in a circle for ever",
+                "unplug one of the coloured wires in the loop",
             ));
             return Expr::Lit(expected.default_value());
         }
@@ -300,7 +329,11 @@ impl<'a> Values<'a> {
             NodeKind::GetVar { ref name, .. } => {
                 if !self.graph.vars.contains_key(name) {
                     self.diags
-                        .push(Diagnostic::at(id, format!("no variable named '{name}'")));
+                        .push(Diagnostic::at(
+                            id,
+                            format!("there is no variable called '{name}'"),
+                            "add it in the Variables panel, or pick a different one on this node",
+                        ));
                 }
                 Expr::GetVar(name.clone())
             }
@@ -312,7 +345,8 @@ impl<'a> Values<'a> {
             other => {
                 self.diags.push(Diagnostic::at(
                     id,
-                    format!("{} does not produce a value", other.title()),
+                    format!("{} does not produce a value, so nothing can read from it", other.title()),
+                    "wire a value node into this pin instead",
                 ));
                 Expr::Lit(expected.default_value())
             }
@@ -329,4 +363,15 @@ fn out(node: NodeId, index: usize) -> PinRef {
         side: Side::Out,
         index,
     }
+}
+
+/// "an integer", "a float" — small, but a diagnostic that says "it takes integer" reads
+/// like a machine wrote it.
+fn a_an(label: &str) -> String {
+    let article = if label.starts_with(['a', 'e', 'i', 'o', 'u']) {
+        "an"
+    } else {
+        "a"
+    };
+    format!("{article} {label}")
 }

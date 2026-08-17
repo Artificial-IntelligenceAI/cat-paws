@@ -514,6 +514,9 @@ impl CatPaws {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if !self.diagnostics.is_empty() {
                         for d in &self.diagnostics {
+                            // What went wrong, then what to do about it. The second line
+                            // is quieter so the eye reads the problem first, but it is
+                            // always there — a beginner needs it more than the first.
                             let label = ui.add(
                                 egui::Label::new(
                                     RichText::new(format!("• {}", d.message)).color(palette.error),
@@ -523,6 +526,17 @@ impl CatPaws {
                             if label.clicked() {
                                 jump_to = d.node;
                             }
+                            if !d.fix.is_empty() {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(10.0);
+                                    ui.add(egui::Label::new(
+                                        RichText::new(format!("try: {}", d.fix))
+                                            .size(12.5)
+                                            .color(palette.text_faint),
+                                    ));
+                                });
+                            }
+                            ui.add_space(3.0);
                         }
                         ui.add_space(6.0);
                     }
