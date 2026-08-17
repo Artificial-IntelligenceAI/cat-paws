@@ -6,7 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Cat Paws</title>
 
-    <link data-trunk rel="rust" data-wasm-opt="0" />
+    <!-- wasm-opt runs on release builds only; dev builds stay fast. -->
+    <link data-trunk rel="rust" data-wasm-opt="z" />
 
     <style>
         html,

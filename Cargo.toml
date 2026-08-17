@@ -17,3 +17,6 @@ opt-level = 2
 lto = true
 codegen-units = 1
 panic = "abort"
+# Note: do NOT add `strip = true`. It makes trunk's bundled wasm-opt fail
+# validation on the memory.copy instructions rustc emits ("requires bulk memory
+# operations"), and wasm-opt -Oz already drops the symbols anyway.
