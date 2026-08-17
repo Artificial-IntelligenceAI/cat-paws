@@ -5,7 +5,7 @@
 //! and produces a `Program` that the VM can execute without ever looking at the
 //! graph again.
 
-use crate::graph::{Graph, NodeId, NodeKind, PinRef, Side};
+use crate::graph::{ArithOp, Graph, NodeId, NodeKind, PinRef, Side};
 use crate::types::{DataType, Value};
 use std::collections::BTreeMap;
 
@@ -144,6 +144,7 @@ pub enum Expr {
     Lit(Value),
     GetVar(String),
     LessThan(Box<Expr>, Box<Expr>),
+    Arith(ArithOp, DataType, Box<Expr>, Box<Expr>),
 }
 
 /// One step of the compiled program. Jumps hold an absolute instruction index.
@@ -187,6 +188,7 @@ fn show(e: &Expr) -> String {
         Expr::Lit(v) => v.to_string(),
         Expr::GetVar(name) => name.clone(),
         Expr::LessThan(a, b) => format!("({} < {})", show(a), show(b)),
+        Expr::Arith(op, _, a, b) => format!("({} {} {})", show(a), op.symbol(), show(b)),
     }
 }
 
@@ -444,6 +446,11 @@ impl<'a> Values<'a> {
                 let a = self.input_expr(id, 0, DataType::Int);
                 let b = self.input_expr(id, 1, DataType::Int);
                 Expr::LessThan(Box::new(a), Box::new(b))
+            }
+            NodeKind::Arith { op, ty } => {
+                let a = self.input_expr(id, 0, ty);
+                let b = self.input_expr(id, 1, ty);
+                Expr::Arith(op, ty, Box::new(a), Box::new(b))
             }
             other => {
                 self.diags.push(Diagnostic::at(

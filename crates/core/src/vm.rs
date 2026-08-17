@@ -4,6 +4,8 @@
 //! runaway program from freezing the browser tab.
 
 use crate::compile::{Expr, Instr, Program};
+use crate::graph::ArithOp;
+use crate::types::DataType;
 use crate::types::Value;
 use std::collections::BTreeMap;
 
@@ -87,6 +89,50 @@ fn eval(expr: &Expr, vars: &BTreeMap<String, Value>) -> Result<Value, String> {
                 (Some(x), Some(y)) => Ok(Value::Bool(x < y)),
                 _ => Err("'less than' needs two numbers".to_string()),
             }
+        }
+        Expr::Arith(op, ty, a, b) => {
+            let a = eval(a, vars)?;
+            let b = eval(b, vars)?;
+            arith(*op, *ty, a, b)
+        }
+    }
+}
+
+/// Integer and float arithmetic, kept in step with what the WebAssembly backend emits.
+///
+/// Whole-number division rounds towards zero and dividing by zero stops the program,
+/// because that is what `i64.div_s` does — the interpreter is only useful as a second
+/// opinion if it agrees on the awkward cases too.
+fn arith(op: ArithOp, ty: DataType, a: Value, b: Value) -> Result<Value, String> {
+    match ty {
+        DataType::Float => {
+            let (Some(x), Some(y)) = (a.as_number(), b.as_number()) else {
+                return Err(format!("'{}' needs two numbers", op.word()));
+            };
+            Ok(Value::Float(match op {
+                ArithOp::Add => x + y,
+                ArithOp::Subtract => x - y,
+                ArithOp::Multiply => x * y,
+                ArithOp::Divide => x / y,
+            }))
+        }
+        _ => {
+            let (Value::Int(x), Value::Int(y)) = (&a, &b) else {
+                return Err(format!("'{}' needs two whole numbers", op.word()));
+            };
+            let (x, y) = (*x, *y);
+            let out = match op {
+                ArithOp::Add => x.wrapping_add(y),
+                ArithOp::Subtract => x.wrapping_sub(y),
+                ArithOp::Multiply => x.wrapping_mul(y),
+                ArithOp::Divide => {
+                    if y == 0 {
+                        return Err("cannot divide a whole number by zero".to_string());
+                    }
+                    x.wrapping_div(y)
+                }
+            };
+            Ok(Value::Int(out))
         }
     }
 }

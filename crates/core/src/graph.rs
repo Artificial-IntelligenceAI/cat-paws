@@ -71,6 +71,43 @@ pub enum Category {
     Variable,
 }
 
+/// The arithmetic a node can do. Kept separate from `NodeKind` so one variant covers
+/// all four operators rather than four near-identical ones.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ArithOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+impl ArithOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            ArithOp::Add => "+",
+            ArithOp::Subtract => "−",
+            ArithOp::Multiply => "×",
+            ArithOp::Divide => "÷",
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            ArithOp::Add => "add",
+            ArithOp::Subtract => "subtract",
+            ArithOp::Multiply => "multiply",
+            ArithOp::Divide => "divide",
+        }
+    }
+
+    pub const ALL: [ArithOp; 4] = [
+        ArithOp::Add,
+        ArithOp::Subtract,
+        ArithOp::Multiply,
+        ArithOp::Divide,
+    ];
+}
+
 /// Every kind of node Cat Paws can execute. Adding a language feature means
 /// adding a variant here, then handling it in `pins`, `compile` and `vm`.
 #[derive(Clone, Debug, PartialEq)]
@@ -83,6 +120,12 @@ pub enum NodeKind {
     Print,
     /// Pure comparison: true when a < b.
     LessThan,
+    /// Arithmetic on two numbers of the same type.
+    ///
+    /// The type is part of the node rather than worked out from what is wired in:
+    /// a pin whose type is fixed can refuse a wrong wire while it is being dragged,
+    /// which is the whole reason the pins are typed.
+    Arith { op: ArithOp, ty: DataType },
     /// Reads the current value of a variable.
     GetVar { name: String, ty: DataType },
     /// Writes a value into a variable.
@@ -100,6 +143,7 @@ impl NodeKind {
             NodeKind::Branch => "Branch".to_string(),
             NodeKind::Print => "Print".to_string(),
             NodeKind::LessThan => "Less than".to_string(),
+            NodeKind::Arith { op, .. } => format!("{} {}", op.word(), op.symbol()),
             NodeKind::GetVar { name, .. } => name.clone(),
             NodeKind::SetVar { name, .. } => format!("Set {name}"),
             NodeKind::LitInt(v) => v.to_string(),
@@ -116,6 +160,7 @@ impl NodeKind {
             NodeKind::Branch => "true / false".to_string(),
             NodeKind::Print => "write a line".to_string(),
             NodeKind::LessThan => "number compare".to_string(),
+            NodeKind::Arith { ty, .. } => format!("{} maths", ty.label()),
             NodeKind::GetVar { ty, .. } => format!("{} variable", ty.label()),
             NodeKind::SetVar { ty, .. } => format!("set {}", ty.label()),
             NodeKind::LitInt(_) => "integer".to_string(),
@@ -130,7 +175,7 @@ impl NodeKind {
             NodeKind::EventStart => Category::Event,
             NodeKind::Branch => Category::Flow,
             NodeKind::Print | NodeKind::SetVar { .. } => Category::Action,
-            NodeKind::LessThan => Category::Pure,
+            NodeKind::LessThan | NodeKind::Arith { .. } => Category::Pure,
             NodeKind::GetVar { .. }
             | NodeKind::LitInt(_)
             | NodeKind::LitFloat(_)
@@ -151,6 +196,7 @@ impl NodeKind {
                 Pin::data("a", DataType::Int),
                 Pin::data("b", DataType::Int),
             ],
+            NodeKind::Arith { ty, .. } => vec![Pin::data("a", *ty), Pin::data("b", *ty)],
             NodeKind::GetVar { .. } => vec![],
             NodeKind::SetVar { ty, .. } => vec![Pin::exec("in"), Pin::data("value", *ty)],
             NodeKind::LitInt(_)
@@ -166,6 +212,7 @@ impl NodeKind {
             NodeKind::Branch => vec![Pin::exec("true"), Pin::exec("false")],
             NodeKind::Print => vec![Pin::exec("then")],
             NodeKind::LessThan => vec![Pin::data("result", DataType::Bool)],
+            NodeKind::Arith { ty, .. } => vec![Pin::data("result", *ty)],
             NodeKind::GetVar { ty, .. } => vec![Pin::data("value", *ty)],
             NodeKind::SetVar { .. } => vec![Pin::exec("then")],
             NodeKind::LitInt(_) => vec![Pin::data("value", DataType::Int)],

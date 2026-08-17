@@ -45,7 +45,7 @@ use crate::compile::{
     Diagnostic, Expr, Values, EXEC_LOOP, MANY_STARTS, NO_START, NO_SUCH_VAR, START_IN_CHAIN,
     VALUE_AS_STEP,
 };
-use crate::graph::{Graph, NodeId, NodeKind, PinRef, Side};
+use crate::graph::{ArithOp, Graph, NodeId, NodeKind, PinRef, Side};
 use crate::types::{DataType, Value};
 
 /// Where the string data starts. Offset 0 is left alone so that a null pointer is never
@@ -255,6 +255,24 @@ impl<'a> Emitter<'a> {
                 // Both pins on Less than are integers, so this is the signed 64-bit
                 // comparison. It leaves an i32 0 or 1, which is what `if` wants.
                 self.body.push(Instruction::I64LtS);
+            }
+            Expr::Arith(op, ty, a, b) => {
+                self.push_expr(a);
+                self.push_expr(b);
+                // One instruction per operator and type. Whole-number division is
+                // signed, and `i64.div_s` traps on a zero divisor — the program stops
+                // rather than inventing an answer, which is what the interpreter does
+                // too.
+                self.body.push(match (ty, op) {
+                    (DataType::Float, ArithOp::Add) => Instruction::F64Add,
+                    (DataType::Float, ArithOp::Subtract) => Instruction::F64Sub,
+                    (DataType::Float, ArithOp::Multiply) => Instruction::F64Mul,
+                    (DataType::Float, ArithOp::Divide) => Instruction::F64Div,
+                    (_, ArithOp::Add) => Instruction::I64Add,
+                    (_, ArithOp::Subtract) => Instruction::I64Sub,
+                    (_, ArithOp::Multiply) => Instruction::I64Mul,
+                    (_, ArithOp::Divide) => Instruction::I64DivS,
+                });
             }
         }
     }

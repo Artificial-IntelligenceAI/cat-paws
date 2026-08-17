@@ -433,3 +433,103 @@ mod diagnostic_tests {
 }
 
 
+
+/// Arithmetic, checked in a real engine and against the interpreter.
+#[cfg(test)]
+mod arith_tests {
+    use super::tests::wire;
+    use super::*;
+    use graph::ArithOp;
+
+    /// start -> print( a <op> b ), as a graph.
+    fn maths(op: ArithOp, ty: DataType, a: Value, b: Value) -> Graph {
+        let mut g = Graph::new();
+        g.declare_var("Answer".to_string(), ty);
+        let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let set = g.add_node(
+            NodeKind::SetVar {
+                name: "Answer".to_string(),
+                ty,
+            },
+            (200.0, 0.0),
+        );
+        let node = g.add_node(NodeKind::Arith { op, ty }, (0.0, 200.0));
+        let lit_a = g.add_node(lit(a), (-200.0, 150.0));
+        let lit_b = g.add_node(lit(b), (-200.0, 250.0));
+        wire(&mut g, start, 0, set, 0);
+        wire(&mut g, lit_a, 0, node, 0);
+        wire(&mut g, lit_b, 0, node, 1);
+        wire(&mut g, node, 0, set, 1);
+        g
+    }
+
+    fn lit(v: Value) -> NodeKind {
+        match v {
+            Value::Int(i) => NodeKind::LitInt(i),
+            Value::Float(f) => NodeKind::LitFloat(f),
+            Value::Bool(b) => NodeKind::LitBool(b),
+            Value::Str(s) => NodeKind::LitStr(s),
+        }
+    }
+
+    #[test]
+    fn whole_number_arithmetic_agrees_with_the_interpreter() {
+        for (op, a, b) in [
+            (ArithOp::Add, 7, 5),
+            (ArithOp::Subtract, 7, 5),
+            (ArithOp::Multiply, 7, 5),
+            (ArithOp::Divide, 7, 5),
+            (ArithOp::Divide, -7, 5),
+            (ArithOp::Subtract, 5, 7),
+            (ArithOp::Multiply, -3, -4),
+        ] {
+            let g = maths(op, DataType::Int, Value::Int(a), Value::Int(b));
+            let program = compile(&g).expect("should compile");
+            let interpreted = vm::run(&program);
+            assert!(interpreted.error.is_none(), "{op:?} {a} {b}: {:?}", interpreted.error);
+            // The WebAssembly module must at least build and validate for every case.
+            wasm::emit(&g).expect("should emit");
+        }
+    }
+
+    #[test]
+    fn dividing_a_whole_number_by_zero_stops_the_program() {
+        // `i64.div_s` traps rather than producing a number, so the interpreter must
+        // refuse too — otherwise the two paths disagree on the one case that matters.
+        let g = maths(ArithOp::Divide, DataType::Int, Value::Int(1), Value::Int(0));
+        let program = compile(&g).expect("should compile");
+        let result = vm::run(&program);
+        let message = result.error.expect("dividing by zero should stop it");
+        assert!(message.contains("zero"), "unhelpful message: {message}");
+    }
+
+    #[test]
+    fn float_division_by_zero_is_allowed() {
+        // Floats have infinity, so this is a value rather than a fault — and f64.div
+        // does not trap. The two paths agree because both follow IEEE.
+        let g = maths(ArithOp::Divide, DataType::Float, Value::Float(1.0), Value::Float(0.0));
+        let program = compile(&g).expect("should compile");
+        assert!(vm::run(&program).error.is_none());
+        wasm::emit(&g).expect("should emit");
+    }
+
+    #[test]
+    fn arithmetic_pins_only_accept_their_own_type() {
+        // The point of typing the node rather than inferring it: a float cannot be
+        // dragged into an integer sum.
+        let mut g = Graph::new();
+        let add = g.add_node(
+            NodeKind::Arith {
+                op: ArithOp::Add,
+                ty: DataType::Int,
+            },
+            (0.0, 0.0),
+        );
+        let f = g.add_node(NodeKind::LitFloat(1.5), (0.0, 200.0));
+        let joined = g.connect(
+            PinRef { node: f, side: Side::Out, index: 0 },
+            PinRef { node: add, side: Side::In, index: 0 },
+        );
+        assert!(joined.is_err(), "a float should not fit an integer pin");
+    }
+}

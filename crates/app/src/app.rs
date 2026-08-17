@@ -4,6 +4,7 @@ use crate::canvas::{Interaction, View};
 use crate::icons::{icon_button, Icon};
 use crate::theme::{Mode, Palette};
 use cat_paws_core::compile::{compile as compile_graph, Diagnostic, Program};
+use cat_paws_core::graph::ArithOp;
 use cat_paws_core::{Category, DataType, Graph, NodeId, NodeKind, PinRef, Side, Value};
 use egui::{Rect, RichText};
 use std::collections::HashSet;
@@ -309,6 +310,34 @@ impl CatPaws {
                         ("Branch", NodeKind::Branch),
                         ("Print", NodeKind::Print),
                         ("Less than", NodeKind::LessThan),
+                        (
+                            "Add +",
+                            NodeKind::Arith {
+                                op: ArithOp::Add,
+                                ty: DataType::Int,
+                            },
+                        ),
+                        (
+                            "Subtract −",
+                            NodeKind::Arith {
+                                op: ArithOp::Subtract,
+                                ty: DataType::Int,
+                            },
+                        ),
+                        (
+                            "Multiply ×",
+                            NodeKind::Arith {
+                                op: ArithOp::Multiply,
+                                ty: DataType::Int,
+                            },
+                        ),
+                        (
+                            "Divide ÷",
+                            NodeKind::Arith {
+                                op: ArithOp::Divide,
+                                ty: DataType::Int,
+                            },
+                        ),
                         ("Number", NodeKind::LitInt(0)),
                         ("Text", NodeKind::LitStr("hello".to_string())),
                         ("True / false", NodeKind::LitBool(true)),
