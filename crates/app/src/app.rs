@@ -308,7 +308,8 @@ impl CatPaws {
                     let buttons: Vec<(&str, NodeKind)> = vec![
                         ("Event start", NodeKind::EventStart),
                         ("Branch", NodeKind::Branch),
-                        ("Print", NodeKind::Print),
+                        ("Print text", NodeKind::Print { ty: DataType::Str }),
+                        ("Print number", NodeKind::Print { ty: DataType::Int }),
                         ("Less than", NodeKind::LessThan),
                         (
                             "Add +",
@@ -720,8 +721,8 @@ fn sample_graph() -> Graph {
     );
     let fifty = g.add_node(NodeKind::LitInt(50), (40.0, 500.0));
     let less = g.add_node(NodeKind::LessThan, (330.0, 390.0));
-    let low = g.add_node(NodeKind::Print, (640.0, 60.0));
-    let fine = g.add_node(NodeKind::Print, (640.0, 250.0));
+    let low = g.add_node(NodeKind::Print { ty: DataType::Str }, (640.0, 60.0));
+    let fine = g.add_node(NodeKind::Print { ty: DataType::Str }, (640.0, 250.0));
     let low_text = g.add_node(NodeKind::LitStr("low health".to_string()), (330.0, 620.0));
     let fine_text = g.add_node(NodeKind::LitStr("fine".to_string()), (330.0, 730.0));
 

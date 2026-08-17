@@ -50,6 +50,39 @@ pub fn run(bytes: &[u8]) -> Outcome {
                 },
             )
             .map_err(|e| e.to_string())?;
+        // The module has one print per type. Formatting happens here because the host
+        // already knows how, and the module would need a heap to build a string.
+        linker
+            .func_wrap(
+                "env",
+                "print_int",
+                |caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, v: i64| {
+                    caller.data().lock().unwrap().push(v.to_string());
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        linker
+            .func_wrap(
+                "env",
+                "print_float",
+                |caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, v: f64| {
+                    caller.data().lock().unwrap().push(v.to_string());
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        linker
+            .func_wrap(
+                "env",
+                "print_bool",
+                |caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, v: i32| {
+                    caller
+                        .data()
+                        .lock()
+                        .unwrap()
+                        .push(if v != 0 { "true" } else { "false" }.to_string());
+                },
+            )
+            .map_err(|e| e.to_string())?;
 
         let instance = linker
             .instantiate(&mut store, &module)
@@ -105,8 +138,27 @@ pub fn run(bytes: &[u8]) -> Outcome {
             PRINTED.with(|p| p.borrow_mut().push(text));
         });
 
+        // An i64 parameter reaches JavaScript as a BigInt, not a number — declaring
+        // this closure as taking f64 makes the call fail at run time, where nothing in
+        // the Rust type system would have complained.
+        let print_int = Closure::<dyn Fn(i64)>::new(|v: i64| {
+            PRINTED.with(|p| p.borrow_mut().push(format!("{v}")));
+        });
+        let print_float = Closure::<dyn Fn(f64)>::new(|v: f64| {
+            PRINTED.with(|p| p.borrow_mut().push(format!("{v}")));
+        });
+        let print_bool = Closure::<dyn Fn(i32)>::new(|v: i32| {
+            PRINTED.with(|p| {
+                p.borrow_mut()
+                    .push(if v != 0 { "true" } else { "false" }.to_string())
+            });
+        });
+
         let env = js_sys::Object::new();
         js_sys::Reflect::set(&env, &"print".into(), print.as_ref()).ok();
+        js_sys::Reflect::set(&env, &"print_int".into(), print_int.as_ref()).ok();
+        js_sys::Reflect::set(&env, &"print_float".into(), print_float.as_ref()).ok();
+        js_sys::Reflect::set(&env, &"print_bool".into(), print_bool.as_ref()).ok();
         let imports = js_sys::Object::new();
         js_sys::Reflect::set(&imports, &"env".into(), &env).ok();
 
@@ -127,8 +179,11 @@ pub fn run(bytes: &[u8]) -> Outcome {
         main.call0(&JsValue::undefined())
             .map_err(|e| format!("stopped while running: {e:?}"))?;
 
-        // Kept alive until the program has finished calling it.
+        // Kept alive until the program has finished calling them.
         drop(print);
+        drop(print_int);
+        drop(print_float);
+        drop(print_bool);
         Ok(())
     })();
 

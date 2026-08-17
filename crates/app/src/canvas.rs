@@ -773,7 +773,7 @@ mod tests {
         for kind in [
             NodeKind::EventStart,
             NodeKind::Branch,
-            NodeKind::Print,
+            NodeKind::Print { ty: DataType::Str },
             NodeKind::LessThan,
             NodeKind::LitInt(7),
         ] {

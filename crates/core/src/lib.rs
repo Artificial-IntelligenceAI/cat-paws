@@ -53,8 +53,8 @@ mod tests {
         );
         let fifty = g.add_node(NodeKind::LitInt(50), (0.0, 300.0));
         let less = g.add_node(NodeKind::LessThan, (200.0, 200.0));
-        let low = g.add_node(NodeKind::Print, (420.0, -40.0));
-        let fine = g.add_node(NodeKind::Print, (420.0, 80.0));
+        let low = g.add_node(NodeKind::Print { ty: DataType::Str }, (420.0, -40.0));
+        let fine = g.add_node(NodeKind::Print { ty: DataType::Str }, (420.0, 80.0));
         let low_text = g.add_node(NodeKind::LitStr("low health".to_string()), (420.0, 300.0));
         let fine_text = g.add_node(NodeKind::LitStr("fine".to_string()), (420.0, 380.0));
 
@@ -136,7 +136,7 @@ mod tests {
     fn unconnected_input_is_reported() {
         let mut g = Graph::new();
         let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
-        let print = g.add_node(NodeKind::Print, (200.0, 0.0));
+        let print = g.add_node(NodeKind::Print { ty: DataType::Str }, (200.0, 0.0));
         wire(&mut g, start, 0, print, 0);
         let diags = compile(&g).expect_err("print with no text should not compile");
         assert!(diags[0].message.contains("nothing wired into it"));
@@ -147,7 +147,7 @@ mod tests {
         let mut g = Graph::new();
         let a = g.add_node(NodeKind::LitStr("a".to_string()), (0.0, 0.0));
         let b = g.add_node(NodeKind::LitStr("b".to_string()), (0.0, 100.0));
-        let print = g.add_node(NodeKind::Print, (200.0, 0.0));
+        let print = g.add_node(NodeKind::Print { ty: DataType::Str }, (200.0, 0.0));
         wire(&mut g, a, 0, print, 1);
         wire(&mut g, b, 0, print, 1);
         assert_eq!(g.links().len(), 1, "second wire should replace the first");
@@ -160,13 +160,13 @@ mod tests {
 /// "does an engine accept them and does the program then do the right thing". Wasmtime
 /// validates a module exactly as a browser does, so a module that runs here runs there.
 #[cfg(test)]
-mod wasm_tests {
+pub(crate) mod wasm_tests {
     use super::tests::{reference_graph, wire};
     use super::*;
     use std::sync::{Arc, Mutex};
 
     /// Instantiate a module, run `main`, and collect whatever it printed.
-    fn run_wasm(bytes: &[u8]) -> Vec<String> {
+    pub(crate) fn run_wasm(bytes: &[u8]) -> Vec<String> {
         let engine = wasmtime::Engine::default();
         let module = wasmtime::Module::new(&engine, bytes).expect("the engine should accept it");
         let printed: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -192,6 +192,37 @@ mod wasm_tests {
                 },
             )
             .expect("print should link");
+        linker
+            .func_wrap(
+                "env",
+                "print_int",
+                |caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, v: i64| {
+                    caller.data().lock().unwrap().push(v.to_string());
+                },
+            )
+            .expect("print_int should link");
+        linker
+            .func_wrap(
+                "env",
+                "print_float",
+                |caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, v: f64| {
+                    caller.data().lock().unwrap().push(v.to_string());
+                },
+            )
+            .expect("print_float should link");
+        linker
+            .func_wrap(
+                "env",
+                "print_bool",
+                |caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, v: i32| {
+                    caller
+                        .data()
+                        .lock()
+                        .unwrap()
+                        .push(if v != 0 { "true" } else { "false" }.to_string());
+                },
+            )
+            .expect("print_bool should link");
 
         let instance = linker
             .instantiate(&mut store, &module)
@@ -243,7 +274,7 @@ mod wasm_tests {
             (200.0, 0.0),
         );
         let text = g.add_node(NodeKind::LitStr("hello paws".to_string()), (0.0, 200.0));
-        let show = g.add_node(NodeKind::Print, (400.0, 0.0));
+        let show = g.add_node(NodeKind::Print { ty: DataType::Str }, (400.0, 0.0));
         let get = g.add_node(
             NodeKind::GetVar {
                 name: "Message".to_string(),
@@ -313,7 +344,7 @@ mod diagnostic_tests {
         let cases: Vec<Vec<Diagnostic>> = vec![
             problems(|g| {
                 // Nothing wired into a Print's text pin.
-                let extra = g.add_node(NodeKind::Print, (900.0, 0.0));
+                let extra = g.add_node(NodeKind::Print { ty: DataType::Str }, (900.0, 0.0));
                 let start = g
                     .nodes()
                     .find(|n| n.kind == NodeKind::EventStart)
@@ -436,7 +467,7 @@ mod diagnostic_tests {
 
 /// Arithmetic, checked in a real engine and against the interpreter.
 #[cfg(test)]
-mod arith_tests {
+pub(crate) mod arith_tests {
     use super::tests::wire;
     use super::*;
     use graph::ArithOp;
@@ -470,6 +501,21 @@ mod arith_tests {
             Value::Bool(b) => NodeKind::LitBool(b),
             Value::Str(s) => NodeKind::LitStr(s),
         }
+    }
+
+    /// start -> print( a <op> b ), so the answer can actually be observed.
+    pub(crate) fn shown(op: ArithOp, ty: DataType, a: Value, b: Value) -> Graph {
+        let mut g = Graph::new();
+        let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let show = g.add_node(NodeKind::Print { ty }, (300.0, 0.0));
+        let node = g.add_node(NodeKind::Arith { op, ty }, (0.0, 200.0));
+        let lit_a = g.add_node(lit(a), (-200.0, 150.0));
+        let lit_b = g.add_node(lit(b), (-200.0, 250.0));
+        wire(&mut g, start, 0, show, 0);
+        wire(&mut g, lit_a, 0, node, 0);
+        wire(&mut g, lit_b, 0, node, 1);
+        wire(&mut g, node, 0, show, 1);
+        g
     }
 
     #[test]
@@ -533,3 +579,46 @@ mod arith_tests {
         assert!(joined.is_err(), "a float should not fit an integer pin");
     }
 }
+
+/// Arithmetic, compared across both backends now that a number can be printed.
+#[cfg(test)]
+mod arith_agreement {
+    use super::arith_tests::shown;
+    use super::wasm_tests::run_wasm;
+    use super::*;
+    use graph::ArithOp;
+
+    #[test]
+    fn both_backends_compute_the_same_answers() {
+        // Until Print could take a number, arithmetic could be computed but not seen,
+        // so the two implementations could not be compared on it at all.
+        for (op, a, b) in [
+            (ArithOp::Add, 7, 5),
+            (ArithOp::Subtract, 7, 5),
+            (ArithOp::Subtract, 5, 7),
+            (ArithOp::Multiply, 7, 5),
+            (ArithOp::Multiply, -3, -4),
+            (ArithOp::Divide, 7, 5),
+            (ArithOp::Divide, -7, 5),
+            (ArithOp::Divide, 7, -5),
+            (ArithOp::Add, i64::MAX, 0),
+            (ArithOp::Multiply, 1_000_000, 1_000_000),
+        ] {
+            let g = shown(op, DataType::Int, Value::Int(a), Value::Int(b));
+            let interpreted = vm::run(&compile(&g).expect("bytecode")).output;
+            let compiled = run_wasm(&wasm::emit(&g).expect("wasm"));
+            assert_eq!(
+                interpreted, compiled,
+                "{a} {} {b}: interpreter said {interpreted:?}, wasm said {compiled:?}",
+                op.symbol()
+            );
+        }
+    }
+
+    #[test]
+    fn a_printed_number_reads_the_way_a_person_writes_it() {
+        let g = shown(ArithOp::Add, DataType::Int, Value::Int(2), Value::Int(3));
+        assert_eq!(run_wasm(&wasm::emit(&g).unwrap()), vec!["5"]);
+    }
+}
+

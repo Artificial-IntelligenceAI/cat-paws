@@ -160,11 +160,14 @@ impl<'a> Emitter<'a> {
         self.exec_path.push(id);
 
         match kind {
-            NodeKind::Print => {
-                let text = self.values.input_expr(id, 1, DataType::Str);
-                self.push_expr(&text);
-                // Import 0: the host's print.
-                self.body.push(Instruction::Call(0));
+            NodeKind::Print { ty } => {
+                let value = self.values.input_expr(id, 1, ty);
+                self.push_expr(&value);
+                // One import per type. Formatting a number as text inside the module
+                // would mean building a string at runtime, which needs a heap the
+                // language does not have yet — so the host, which already has string
+                // formatting, does it.
+                self.body.push(Instruction::Call(print_import(ty)));
                 self.walk_from(out(id, 0));
             }
             NodeKind::SetVar { ref name, ty } => {
@@ -282,17 +285,23 @@ impl<'a> Emitter<'a> {
         let mut module = Module::new();
 
         // Two signatures: the host's print takes a pointer, and main takes nothing.
+        // Signatures: a pointer for text, then one per number type, then main.
         let mut types = TypeSection::new();
-        types.ty().function([ValType::I32], []);
-        types.ty().function([], []);
+        types.ty().function([ValType::I32], []); // 0: print text, and print bool
+        types.ty().function([ValType::I64], []); // 1: print whole number
+        types.ty().function([ValType::F64], []); // 2: print float
+        types.ty().function([], []); // 3: main
         module.section(&types);
 
         let mut imports = ImportSection::new();
         imports.import("env", "print", EntityType::Function(0));
+        imports.import("env", "print_int", EntityType::Function(1));
+        imports.import("env", "print_float", EntityType::Function(2));
+        imports.import("env", "print_bool", EntityType::Function(0));
         module.section(&imports);
 
         let mut functions = FunctionSection::new();
-        functions.function(1);
+        functions.function(3);
         module.section(&functions);
 
         // One page is 64KiB, which is far more than the string table needs.
@@ -307,8 +316,8 @@ impl<'a> Emitter<'a> {
         module.section(&memories);
 
         let mut exports = ExportSection::new();
-        // Function 0 is the import, so ours is 1.
-        exports.export("main", ExportKind::Func, 1);
+        // The four imports come first, so ours is index 4.
+        exports.export("main", ExportKind::Func, MAIN_FUNC);
         // The host reads printed strings straight out of this.
         exports.export("memory", ExportKind::Memory, 0);
         module.section(&exports);
@@ -335,6 +344,19 @@ impl<'a> Emitter<'a> {
         module.finish()
     }
 }
+
+/// Which imported print a type uses. The order matches how they are declared.
+fn print_import(ty: DataType) -> u32 {
+    match ty {
+        DataType::Str => 0,
+        DataType::Int => 1,
+        DataType::Float => 2,
+        DataType::Bool => 3,
+    }
+}
+
+/// The index of `main`, which follows the four imports.
+const MAIN_FUNC: u32 = 4;
 
 /// The single `Event start` a program must have.
 fn entry_point(graph: &Graph) -> Result<NodeId, Vec<Diagnostic>> {

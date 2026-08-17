@@ -117,7 +117,11 @@ pub enum NodeKind {
     /// Sends execution down one of two paths depending on a boolean.
     Branch,
     /// Writes a line to the output console.
-    Print,
+    ///
+    /// Carries the type it prints, so a number can be shown without first being turned
+    /// into text. Building text at runtime would need a heap, and nothing in the
+    /// language needs one yet — see docs/memory.md.
+    Print { ty: DataType },
     /// Pure comparison: true when a < b.
     LessThan,
     /// Arithmetic on two numbers of the same type.
@@ -141,7 +145,10 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => "Event start".to_string(),
             NodeKind::Branch => "Branch".to_string(),
-            NodeKind::Print => "Print".to_string(),
+            NodeKind::Print { ty } => match ty {
+                DataType::Str => "Print".to_string(),
+                _ => format!("Print {}", ty.label()),
+            },
             NodeKind::LessThan => "Less than".to_string(),
             NodeKind::Arith { op, .. } => format!("{} {}", op.word(), op.symbol()),
             NodeKind::GetVar { name, .. } => name.clone(),
@@ -158,7 +165,7 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => "entry point".to_string(),
             NodeKind::Branch => "true / false".to_string(),
-            NodeKind::Print => "write a line".to_string(),
+            NodeKind::Print { .. } => "write a line".to_string(),
             NodeKind::LessThan => "number compare".to_string(),
             NodeKind::Arith { ty, .. } => format!("{} maths", ty.label()),
             NodeKind::GetVar { ty, .. } => format!("{} variable", ty.label()),
@@ -174,7 +181,7 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => Category::Event,
             NodeKind::Branch => Category::Flow,
-            NodeKind::Print | NodeKind::SetVar { .. } => Category::Action,
+            NodeKind::Print { .. } | NodeKind::SetVar { .. } => Category::Action,
             NodeKind::LessThan | NodeKind::Arith { .. } => Category::Pure,
             NodeKind::GetVar { .. }
             | NodeKind::LitInt(_)
@@ -191,7 +198,10 @@ impl NodeKind {
                 Pin::exec("in"),
                 Pin::data("condition", DataType::Bool),
             ],
-            NodeKind::Print => vec![Pin::exec("in"), Pin::data("text", DataType::Str)],
+            NodeKind::Print { ty } => vec![
+                Pin::exec("in"),
+                Pin::data(if *ty == DataType::Str { "text" } else { "value" }, *ty),
+            ],
             NodeKind::LessThan => vec![
                 Pin::data("a", DataType::Int),
                 Pin::data("b", DataType::Int),
@@ -210,7 +220,7 @@ impl NodeKind {
         match self {
             NodeKind::EventStart => vec![Pin::exec("then")],
             NodeKind::Branch => vec![Pin::exec("true"), Pin::exec("false")],
-            NodeKind::Print => vec![Pin::exec("then")],
+            NodeKind::Print { .. } => vec![Pin::exec("then")],
             NodeKind::LessThan => vec![Pin::data("result", DataType::Bool)],
             NodeKind::Arith { ty, .. } => vec![Pin::data("result", *ty)],
             NodeKind::GetVar { ty, .. } => vec![Pin::data("value", *ty)],

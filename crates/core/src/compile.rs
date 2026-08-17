@@ -310,8 +310,8 @@ impl<'a> Compiler<'a> {
         self.exec_path.push(id);
 
         match kind {
-            NodeKind::Print => {
-                let text = self.values.input_expr(id, 1, DataType::Str);
+            NodeKind::Print { ty } => {
+                let text = self.values.input_expr(id, 1, ty);
                 self.instrs.push(Instr::Print(text));
                 self.emit_after(out(id, 0));
             }
