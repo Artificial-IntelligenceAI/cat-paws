@@ -565,7 +565,11 @@ impl eframe::App for CatPaws {
             (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Z)
         });
         // Don't steal Cmd+Z from a text field the user is typing in.
-        let typing = ui.ctx().memory(|m| m.focused()).is_some();
+        //
+        // This must ask specifically about a *text edit*. `memory().focused()` is
+        // Some for any focusable widget -- including the canvas -- so guarding on
+        // that disabled the shortcut permanently after the first canvas click.
+        let typing = ui.ctx().text_edit_focused();
         if undo_shortcut && !typing {
             self.undo();
         }

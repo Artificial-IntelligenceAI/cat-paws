@@ -236,15 +236,21 @@ impl CatPaws {
         found
     }
 
-    /// All hit-testing here uses [`egui::Response::interact_pointer_pos`] — the
-    /// position of the pointer *in this interaction* — rather than the hovered
-    /// position. What you grabbed has to be decided where the button went down:
-    /// if a press, move and release all land in one frame (a fast drag, or a
-    /// synthetic one), the hover position is already at the release point, and
-    /// hit-testing there grabs the wrong node or misses entirely and pans.
+    /// Hit-testing never uses the *hovered* position: what you grabbed has to be
+    /// decided where the button went down.
+    ///
+    /// For the start of a drag that means [`egui::PointerState::press_origin`],
+    /// not `interact_pointer_pos`. `interact_pointer_pos` is the pointer's
+    /// current position, and egui does not report `drag_started` until the
+    /// pointer has travelled past `max_click_dist` — so by the time a drag is
+    /// recognised, the current position has already drifted several pixels away
+    /// from the press. That drift still lands inside a node body, but it is
+    /// enough to miss a pin, whose hit radius is only about ten pixels. Wire
+    /// drags silently became canvas pans.
     fn handle_interaction(&mut self, ui: &Ui, response: &egui::Response, rect: Rect) {
         let alt = ui.input(|i| i.modifiers.alt);
         let pointer = response.interact_pointer_pos();
+        let press = ui.input(|i| i.pointer.press_origin()).or(pointer);
 
         if response.clicked() {
             if let Some(p) = pointer {
@@ -262,7 +268,7 @@ impl CatPaws {
         }
 
         if response.drag_started() {
-            self.interaction = match pointer {
+            self.interaction = match press {
                 Some(p) => {
                     if let Some(pin) = self.pin_at(rect, p) {
                         Interaction::DragWire { origin: pin }
@@ -334,8 +340,10 @@ impl CatPaws {
         }
 
         // Backspace must not delete the selected node while the user is typing
-        // in the variable-name field.
-        let typing = ui.ctx().memory(|m| m.focused()).is_some();
+        // in the variable-name field. Ask about text edits specifically: the
+        // canvas is itself focusable, so a broader check would disable Delete
+        // as soon as the canvas was clicked -- which is always.
+        let typing = ui.ctx().text_edit_focused();
         if !typing
             && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
         {
