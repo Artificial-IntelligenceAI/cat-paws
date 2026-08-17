@@ -51,6 +51,15 @@
     <canvas id="the_canvas_id"></canvas>
     <div class="loading" id="loading">loading Cat Paws&hellip;</div>
     <script>
+        // The right mouse button pans the canvas, so the browser's own context
+        // menu must not appear on right-press.
+        document.addEventListener("DOMContentLoaded", () => {
+            const canvas = document.getElementById("the_canvas_id");
+            if (canvas) {
+                canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+            }
+        });
+
         // Remove the loading text once the canvas has been painted at least once.
         document.addEventListener("DOMContentLoaded", () => {
             const observer = new MutationObserver(() => {

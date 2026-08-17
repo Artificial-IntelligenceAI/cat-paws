@@ -153,6 +153,24 @@ fn draw_wire(painter: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
     ));
 }
 
+/// Draws text with extra stroke weight.
+///
+/// egui's bundled fonts ship no bold face, so weight is faked by painting the
+/// same string a fraction of a pixel apart. At these sizes the offsets land
+/// inside the antialiasing and read as a heavier stroke rather than a blur.
+fn text_semibold(
+    painter: &Painter,
+    pos: Pos2,
+    anchor: Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+) {
+    for offset in [vec2(0.0, 0.0), vec2(0.5, 0.0), vec2(0.0, 0.35)] {
+        painter.text(pos + offset, anchor, text, font.clone(), color);
+    }
+}
+
 fn pin_color(palette: &Palette, kind: PinKind) -> Color32 {
     match kind {
         PinKind::Exec => palette.exec_wire,
@@ -293,6 +311,28 @@ impl CatPaws {
         let pointer = response.interact_pointer_pos();
         let press = ui.input(|i| i.pointer.press_origin()).or(pointer);
 
+        // The right button pans, and it pans from anywhere -- including from on
+        // top of a node -- so the view can always be moved without hunting for a
+        // patch of empty canvas. The left button is reserved for the graph
+        // itself: moving nodes and pulling wires.
+        let (pan_pressed, pan_held, pointer_delta) = ui.input(|i| {
+            (
+                i.pointer.button_pressed(egui::PointerButton::Secondary),
+                i.pointer.button_down(egui::PointerButton::Secondary),
+                i.pointer.delta(),
+            )
+        });
+        if pan_pressed && ui.rect_contains_pointer(rect) {
+            self.interaction = Interaction::Panning;
+        }
+        if matches!(self.interaction, Interaction::Panning) {
+            if pan_held {
+                self.view.pan += pointer_delta;
+                return;
+            }
+            self.interaction = Interaction::Idle;
+        }
+
         if response.clicked() {
             if let Some(p) = pointer {
                 // Alt-click a pin to cut every wire attached to it.
@@ -325,16 +365,17 @@ impl CatPaws {
                             grab: world - pos2(node_pos.0, node_pos.1),
                         }
                     } else {
-                        Interaction::Panning
+                        // Left-dragging empty canvas does nothing; panning is
+                        // the right button's job.
+                        Interaction::Idle
                     }
                 }
-                None => Interaction::Panning,
+                None => Interaction::Idle,
             };
         }
 
         if response.dragged() {
             match self.interaction {
-                Interaction::Panning => self.view.pan += response.drag_delta(),
                 Interaction::DragNode { id, grab } => {
                     if let Some(p) = response.interact_pointer_pos() {
                         let world = self.view.to_world(rect, p) - grab;
@@ -543,14 +584,15 @@ impl CatPaws {
                     FontId::proportional(title_px),
                     palette.on_category(),
                 );
-                text.text(
+                text_semibold(
+                    &text,
                     pos2(header.min.x + pad_x, top + title_px + 4.0 + subtitle_px / 2.0),
                     Align2::LEFT_CENTER,
-                    node.kind.subtitle(),
+                    &node.kind.subtitle(),
                     FontId::proportional(subtitle_px),
-                    // Only slightly dimmed: at this size a heavy fade made the
-                    // subtitle unreadable against the header colour.
-                    palette.on_category().gamma_multiply(0.88),
+                    // Barely dimmed now that it carries weight -- a heavier
+                    // stroke plus a strong fade just looks muddy.
+                    palette.on_category().gamma_multiply(0.94),
                 );
             } else {
                 // No room for both, so the title takes the whole header.
@@ -651,7 +693,7 @@ impl CatPaws {
         painter.text(
             pos2(rect.min.x + 12.0, rect.max.y - 12.0),
             Align2::LEFT_BOTTOM,
-            "drag empty space to pan  ·  scroll to zoom  ·  drag a pin to wire  ·  alt-click a pin to cut  ·  delete removes a node",
+            "left-drag a node to move it  ·  right-drag to pan  ·  scroll to zoom  ·  drag a pin to wire  ·  alt-click a pin to cut  ·  delete removes a node",
             FontId::proportional(12.5),
             palette.text,
         );

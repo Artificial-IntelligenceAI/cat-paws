@@ -65,11 +65,18 @@ layout from each node's pin list, so it needs no changes to draw or wire it.
 
 | | |
 | --- | --- |
-| Drag empty space | Pan |
+| Left-drag a node | Move it |
+| Right-drag | Pan the workspace |
 | Scroll | Zoom |
 | Drag a pin | Draw a wire |
 | Alt-click a pin | Cut its wires |
 | Delete / Backspace | Remove the selected node |
+| Cmd+Z / Ctrl+Z | Undo |
+
+The two mouse buttons are kept separate on purpose: the left button acts on the
+graph (move nodes, pull wires) and the right button moves the view. Panning works
+from anywhere, including on top of a node, so you never have to find empty canvas
+to move around.
 
 ## Theme
 
