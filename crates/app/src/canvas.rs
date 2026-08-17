@@ -770,6 +770,8 @@ mod tests {
     /// stays inside the node's own box.
     #[test]
     fn pins_sit_on_the_node_edges() {
+        use cat_paws_core::DataType;
+
         for kind in [
             NodeKind::EventStart,
             NodeKind::Branch,
