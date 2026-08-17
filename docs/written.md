@@ -77,11 +77,36 @@ names for one thing.
 `integer` and `float` are separate because they are separate pins. A whole number will not
 wire into a float input, and the written form cannot hide that.
 
-## Still to decide
+## The rest of the syntax
 
-- How a statement ends — newline, or something written
-- Arithmetic: `+ - × ÷`, and whether `×` or `*`
-- Comments
-- Whether `set` is a separate word from `declare`
-- What happens to nodes that already exist when text is generated: added alongside, or
-  replacing the canvas
+**A newline ends a statement.** Nothing is written to end one. This is a typing aid, not a
+file format, so there is no reason to make the reader type punctuation.
+
+**`declare` and `set` are different words** because they do different things: `declare`
+adds a variable to the panel *and* writes to it; `set` only writes to one that exists.
+Setting something undeclared is refused rather than quietly declaring it.
+
+**Arithmetic is `+ - * /`**, with `×` and `÷` also accepted. The node titles show `×` and
+`÷`, but neither is on a keyboard, and a written form nobody can type has missed the point.
+
+**`#` starts a comment**, to the end of the line.
+
+Precedence is the usual one: comparison binds loosest, then `+ -`, then `* /`. So
+`integer '10' - integer '4' * integer '2'` is 2, not 12.
+
+## Generated nodes are added, never substituted
+
+What is written appears beside what is already on the canvas, wired among itself. Nothing
+built by hand can be destroyed by typing. Generating twice leaves two copies, and the way
+to remove one is to delete it.
+
+A fragment is given its own `Event start` **only if the canvas has none**. Adding a second
+would stop a working program compiling, so an existing program is left for the reader to
+wire the new piece into.
+
+## What it does not do yet
+
+Loops, since the graph has none. Functions, since the graph has none. And there is no way
+to write a node that has no place in a statement — a value node sitting on its own — which
+is fine, because that is what dragging is for.
+

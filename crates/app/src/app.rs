@@ -32,6 +32,9 @@ pub struct CatPaws {
     pub output: Vec<String>,
     pub status: Status,
     pub show_listing: bool,
+    /// What is typed in the write box. Never saved — it makes nodes and is cleared.
+    pub written: String,
+    pub written_problems: Vec<cat_paws_core::written::Problem>,
 
     new_var_name: String,
     new_var_type: DataType,
@@ -70,6 +73,8 @@ impl CatPaws {
             output: Vec::new(),
             status: Status::Stale("not compiled yet".to_string()),
             show_listing: false,
+            written: String::new(),
+            written_problems: Vec::new(),
             new_var_name: String::new(),
             new_var_type: DataType::Int,
             last_canvas: Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
@@ -302,6 +307,67 @@ impl CatPaws {
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(6.0);
+                    ui.label(RichText::new("WRITE NODES").size(12.5).color(palette.text_faint));
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.written)
+                            .desired_rows(5)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text("declare 'health' = integer '20'"),
+                    );
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Create nodes").color(palette.text_strong),
+                            )
+                            .fill(palette.category_color(Category::Flow).gamma_multiply(0.28))
+                            .min_size(egui::vec2(ui.available_width(), 24.0)),
+                        )
+                        .clicked()
+                        && !self.written.trim().is_empty()
+                    {
+                        self.push_undo();
+                        // Added beside what is already there, never replacing it, so
+                        // typing can never destroy something built by hand.
+                        match cat_paws_core::written::generate(&mut self.graph, &self.written) {
+                            Ok(made) => {
+                                self.written.clear();
+                                self.written_problems.clear();
+                                self.mark_stale();
+                                self.status = Status::Ok(format!(
+                                    "made {} node{}",
+                                    made.len(),
+                                    if made.len() == 1 { "" } else { "s" }
+                                ));
+                            }
+                            Err(problems) => {
+                                self.status = Status::Failed(format!(
+                                    "{} problem{} in what you wrote",
+                                    problems.len(),
+                                    if problems.len() == 1 { "" } else { "s" }
+                                ));
+                                self.written_problems = problems;
+                            }
+                        }
+                    }
+                    for p in &self.written_problems {
+                        ui.add(egui::Label::new(
+                            RichText::new(format!("line {}: {}", p.line, p.message))
+                                .size(12.0)
+                                .color(palette.error),
+                        ));
+                        ui.horizontal(|ui| {
+                            ui.add_space(8.0);
+                            ui.add(egui::Label::new(
+                                RichText::new(format!("try: {}", p.fix))
+                                    .size(11.5)
+                                    .color(palette.text_faint),
+                            ));
+                        });
+                    }
+
+                    ui.add_space(10.0);
                     ui.label(RichText::new("ADD NODE").size(12.5).color(palette.text_faint));
                     ui.add_space(4.0);
 

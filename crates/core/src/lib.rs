@@ -8,12 +8,14 @@ pub mod graph;
 pub mod types;
 pub mod vm;
 pub mod wasm;
+pub mod written;
 
 pub use compile::{compile, Area, Code, Diagnostic, Expr, Instr, Program};
 pub use graph::{Category, Graph, Link, Node, NodeId, NodeKind, Pin, PinKind, PinRef, Side};
 pub use types::{DataType, Value};
 pub use vm::{run, RunResult};
 pub use wasm::emit;
+pub use written::{generate, Problem};
 
 #[cfg(test)]
 mod tests {
@@ -622,3 +624,125 @@ mod arith_agreement {
     }
 }
 
+
+/// The written form, judged by whether what it builds actually runs.
+#[cfg(test)]
+mod written_tests {
+    use super::wasm_tests::run_wasm;
+    use super::*;
+
+    /// Type a program, then run whatever appeared on the canvas.
+    fn typed(text: &str) -> Vec<String> {
+        let mut g = Graph::new();
+        written::generate(&mut g, text).unwrap_or_else(|p| panic!("should read: {p:#?}"));
+        run_wasm(&wasm::emit(&g).unwrap_or_else(|d| panic!("should compile: {d:#?}")))
+    }
+
+    #[test]
+    fn the_reference_program_can_be_typed() {
+        // The health check, in six lines instead of ten dragged nodes.
+        let out = typed(
+            "declare 'health' = integer '20'\n\
+             if 'health' < integer '50' {\n\
+                 print string 'low health'\n\
+             } else {\n\
+                 print string 'fine'\n\
+             }",
+        );
+        assert_eq!(out, vec!["low health"]);
+    }
+
+    #[test]
+    fn the_other_branch_runs_too() {
+        let out = typed(
+            "declare 'health' = integer '90'\n\
+             if 'health' < integer '50' {\n\
+                 print string 'low health'\n\
+             } else {\n\
+                 print string 'fine'\n\
+             }",
+        );
+        assert_eq!(out, vec!["fine"]);
+    }
+
+    #[test]
+    fn arithmetic_and_printing_a_number() {
+        assert_eq!(typed("print integer '2' + integer '3'"), vec!["5"]);
+        assert_eq!(typed("print integer '10' - integer '4' * integer '2'"), vec!["2"]);
+        assert_eq!(typed("print float '7.5' / float '2.5'"), vec!["3"]);
+    }
+
+    #[test]
+    fn a_variable_can_be_declared_then_set_then_read() {
+        let out = typed(
+            "declare 'n' = integer '1'\n\
+             set 'n' = 'n' + integer '41'\n\
+             print 'n'",
+        );
+        assert_eq!(out, vec!["42"]);
+    }
+
+    #[test]
+    fn comments_and_blank_lines_are_ignored() {
+        let out = typed(
+            "# the answer\n\
+             \n\
+             print integer '42'   # shown here\n",
+        );
+        assert_eq!(out, vec!["42"]);
+    }
+
+    #[test]
+    fn one_line_makes_as_many_nodes_as_it_needs() {
+        let mut g = Graph::new();
+        let made = written::generate(&mut g, "declare 'x' = integer '20'").unwrap();
+        // A variable, a literal and a Set — plus the Event start, since the canvas had
+        // none of its own.
+        assert!(g.vars.contains_key("x"), "the variable should exist");
+        assert_eq!(made.len(), 3, "expected start, literal and set: {made:?}");
+    }
+
+    #[test]
+    fn what_is_already_on_the_canvas_is_left_alone() {
+        let mut g = Graph::new();
+        let kept = g.add_node(NodeKind::LitInt(7), (0.0, 0.0));
+        written::generate(&mut g, "print integer '1'").unwrap();
+        assert!(g.node(kept).is_some(), "the existing node should still be there");
+        // The canvas already had no Event start, so one was made.
+        assert_eq!(
+            g.nodes().filter(|n| n.kind == NodeKind::EventStart).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_second_start_is_not_added_to_a_canvas_that_has_one() {
+        let mut g = Graph::new();
+        g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        written::generate(&mut g, "print integer '1'").unwrap();
+        assert_eq!(
+            g.nodes().filter(|n| n.kind == NodeKind::EventStart).count(),
+            1,
+            "a second start would stop the program compiling"
+        );
+    }
+
+    #[test]
+    fn problems_name_the_line_and_say_what_to_do() {
+        let cases = [
+            ("print integer '20'\nwibble 'x'", 2),
+            ("declare 'x' integer '1'", 1),
+            ("print 'nothere'", 1),
+            ("print integer '1' + float '1.5'", 1),
+            ("if 'x' < integer '1' {\nprint integer '2'", 1),
+        ];
+        for (text, line) in cases {
+            let mut g = Graph::new();
+            let problems = written::generate(&mut g, text)
+                .err()
+                .unwrap_or_else(|| panic!("should have been refused: {text}"));
+            assert_eq!(problems[0].line, line, "wrong line for: {text}");
+            assert!(!problems[0].fix.is_empty(), "no fix offered for: {text}");
+        }
+    }
+}
