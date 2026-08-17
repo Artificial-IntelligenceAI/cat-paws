@@ -6,3 +6,9 @@ license.workspace = true
 description = "Graph model, compiler and virtual machine for Cat Paws. No UI dependencies."
 
 [dependencies]
+wasm-encoder = "0.256"
+
+[dev-dependencies]
+# A real engine, so the tests prove a browser would accept the bytes rather than
+# only that we produced some.
+wasmtime = { version = "38", default-features = false, features = ["cranelift", "runtime", "std"] }

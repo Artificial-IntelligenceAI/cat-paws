@@ -112,7 +112,7 @@ pub fn compile(graph: &Graph) -> Result<Program, Vec<Diagnostic>> {
         instrs: Vec::new(),
         diags: Vec::new(),
         exec_path: Vec::new(),
-        data_path: Vec::new(),
+        values: Values::new(graph),
     };
 
     c.emit_after(PinRef {
@@ -121,6 +121,7 @@ pub fn compile(graph: &Graph) -> Result<Program, Vec<Diagnostic>> {
         index: 0,
     });
 
+    c.diags.append(&mut c.values.diags);
     if c.diags.is_empty() {
         let vars = graph
             .vars
@@ -142,8 +143,29 @@ struct Compiler<'a> {
     diags: Vec<Diagnostic>,
     /// Nodes on the current execution path, used to catch loops.
     exec_path: Vec<NodeId>,
+    values: Values<'a>,
+}
+
+/// Turns data wires into `Expr` trees.
+///
+/// Separate from the execution walk so that any backend can reuse it. There is one
+/// definition of what a data wire means, and the WASM emitter shares it rather than
+/// keeping a second copy that could drift.
+pub(crate) struct Values<'a> {
+    graph: &'a Graph,
+    pub(crate) diags: Vec<Diagnostic>,
     /// Nodes on the current data path, used to catch circular values.
     data_path: Vec<NodeId>,
+}
+
+impl<'a> Values<'a> {
+    pub(crate) fn new(graph: &'a Graph) -> Values<'a> {
+        Values {
+            graph,
+            diags: Vec::new(),
+            data_path: Vec::new(),
+        }
+    }
 }
 
 impl<'a> Compiler<'a> {
@@ -170,17 +192,17 @@ impl<'a> Compiler<'a> {
 
         match kind {
             NodeKind::Print => {
-                let text = self.input_expr(id, 1, DataType::Str);
+                let text = self.values.input_expr(id, 1, DataType::Str);
                 self.instrs.push(Instr::Print(text));
                 self.emit_after(out(id, 0));
             }
             NodeKind::SetVar { ref name, ty } => {
-                let value = self.input_expr(id, 1, ty);
+                let value = self.values.input_expr(id, 1, ty);
                 self.instrs.push(Instr::SetVar(name.clone(), value));
                 self.emit_after(out(id, 0));
             }
             NodeKind::Branch => {
-                let cond = self.input_expr(id, 1, DataType::Bool);
+                let cond = self.values.input_expr(id, 1, DataType::Bool);
 
                 // Reserve the conditional jump, fill in its target once we know
                 // where the false branch starts.
@@ -222,8 +244,11 @@ impl<'a> Compiler<'a> {
         self.exec_path.pop();
     }
 
+}
+
+impl<'a> Values<'a> {
     /// Compiles whatever feeds input pin `index` of `node`.
-    fn input_expr(&mut self, node: NodeId, index: usize, expected: DataType) -> Expr {
+    pub(crate) fn input_expr(&mut self, node: NodeId, index: usize, expected: DataType) -> Expr {
         let pin = PinRef {
             node,
             side: Side::In,

@@ -7,17 +7,19 @@ pub mod compile;
 pub mod graph;
 pub mod types;
 pub mod vm;
+pub mod wasm;
 
 pub use compile::{compile, Diagnostic, Expr, Instr, Program};
 pub use graph::{Category, Graph, Link, Node, NodeId, NodeKind, Pin, PinKind, PinRef, Side};
 pub use types::{DataType, Value};
 pub use vm::{run, RunResult};
+pub use wasm::emit;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn wire(g: &mut Graph, from: NodeId, fi: usize, to: NodeId, ti: usize) {
+    pub(crate) fn wire(g: &mut Graph, from: NodeId, fi: usize, to: NodeId, ti: usize) {
         g.connect(
             PinRef {
                 node: from,
@@ -35,7 +37,7 @@ mod tests {
 
     /// Builds the graph from the reference image: start -> branch on
     /// (health < 50), printing a different line on each side.
-    fn reference_graph(health: i64) -> Graph {
+    pub(crate) fn reference_graph(health: i64) -> Graph {
         let mut g = Graph::new();
         g.declare_var("Health".to_string(), DataType::Int);
         g.vars.get_mut("Health").unwrap().initial = Value::Int(health);
@@ -149,5 +151,127 @@ mod tests {
         wire(&mut g, a, 0, print, 1);
         wire(&mut g, b, 0, print, 1);
         assert_eq!(g.links().len(), 1, "second wire should replace the first");
+    }
+}
+
+/// Running compiled WebAssembly, in a real engine.
+///
+/// These are the tests that matter for the compiler: not "did we produce bytes" but
+/// "does an engine accept them and does the program then do the right thing". Wasmtime
+/// validates a module exactly as a browser does, so a module that runs here runs there.
+#[cfg(test)]
+mod wasm_tests {
+    use super::tests::{reference_graph, wire};
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Instantiate a module, run `main`, and collect whatever it printed.
+    fn run_wasm(bytes: &[u8]) -> Vec<String> {
+        let engine = wasmtime::Engine::default();
+        let module = wasmtime::Module::new(&engine, bytes).expect("the engine should accept it");
+        let printed: Arc<Mutex<Vec<String>>> = Arc::default();
+
+        let mut store = wasmtime::Store::new(&engine, Arc::clone(&printed));
+        let mut linker = wasmtime::Linker::new(&engine);
+        linker
+            .func_wrap(
+                "env",
+                "print",
+                |mut caller: wasmtime::Caller<'_, Arc<Mutex<Vec<String>>>>, ptr: i32| {
+                    // Exactly what a browser host does: read the length prefix, then
+                    // that many UTF-8 bytes out of the module's exported memory.
+                    let memory = caller
+                        .get_export("memory")
+                        .and_then(|e| e.into_memory())
+                        .expect("the module should export its memory");
+                    let data = memory.data(&caller);
+                    let at = ptr as usize;
+                    let len = u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize;
+                    let text = String::from_utf8_lossy(&data[at + 4..at + 4 + len]).into_owned();
+                    caller.data().lock().unwrap().push(text);
+                },
+            )
+            .expect("print should link");
+
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .expect("the module should instantiate");
+        instance
+            .get_typed_func::<(), ()>(&mut store, "main")
+            .expect("main should be exported")
+            .call(&mut store, ())
+            .expect("main should run");
+
+        let out = printed.lock().unwrap().clone();
+        out
+    }
+
+    #[test]
+    fn a_branch_becomes_structured_control_flow() {
+        // The same graph both ways. WebAssembly has no jump-to-address, so this proves
+        // the branch really did become a nested `if`/`else`.
+        assert_eq!(run_wasm(&emit(&reference_graph(20)).unwrap()), vec!["low health"]);
+        assert_eq!(run_wasm(&emit(&reference_graph(90)).unwrap()), vec!["fine"]);
+    }
+
+    #[test]
+    fn the_interpreter_and_the_compiler_agree() {
+        // The old bytecode VM is kept as a second opinion. Two implementations written
+        // separately will not usually be wrong in the same way, so a disagreement is a
+        // real bug in one of them.
+        for health in [-5, 0, 1, 49, 50, 51, 90, 1000] {
+            let graph = reference_graph(health);
+            let interpreted = run(&compile(&graph).expect("bytecode should compile")).output;
+            let compiled = run_wasm(&emit(&graph).expect("wasm should compile"));
+            assert_eq!(
+                interpreted, compiled,
+                "health {health}: interpreter said {interpreted:?}, wasm said {compiled:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn variables_round_trip_through_locals() {
+        let mut g = Graph::new();
+        g.declare_var("Message".to_string(), DataType::Str);
+        let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let set = g.add_node(
+            NodeKind::SetVar {
+                name: "Message".to_string(),
+                ty: DataType::Str,
+            },
+            (200.0, 0.0),
+        );
+        let text = g.add_node(NodeKind::LitStr("hello paws".to_string()), (0.0, 200.0));
+        let show = g.add_node(NodeKind::Print, (400.0, 0.0));
+        let get = g.add_node(
+            NodeKind::GetVar {
+                name: "Message".to_string(),
+                ty: DataType::Str,
+            },
+            (200.0, 200.0),
+        );
+        wire(&mut g, start, 0, set, 0);
+        wire(&mut g, text, 0, set, 1);
+        wire(&mut g, set, 0, show, 0);
+        wire(&mut g, get, 0, show, 1);
+
+        assert_eq!(run_wasm(&emit(&g).unwrap()), vec!["hello paws"]);
+    }
+
+    /// Writes the reference program out so it can be inspected or run elsewhere.
+    #[test]
+    fn dump_a_module_for_inspection() {
+        let bytes = emit(&reference_graph(20)).unwrap();
+        let path = std::env::temp_dir().join("cat-paws-reference.wasm");
+        std::fs::write(&path, &bytes).unwrap();
+        eprintln!("wrote {} ({} bytes)", path.display(), bytes.len());
+    }
+
+    #[test]
+    fn a_graph_with_no_start_is_refused() {
+        let g = Graph::new();
+        let diags = emit(&g).expect_err("should not compile");
+        assert!(diags[0].message.contains("Event start"), "{diags:?}");
     }
 }
