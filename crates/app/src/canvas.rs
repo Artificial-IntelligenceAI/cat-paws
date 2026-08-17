@@ -19,6 +19,47 @@ pub const BODY_PAD: f32 = 10.0;
 pub const PIN_R: f32 = 5.0;
 pub const GRID: f32 = 32.0;
 
+/// Text sizes at 100% zoom.
+pub const TITLE_PX: f32 = 15.5;
+pub const SUBTITLE_PX: f32 = 12.0;
+pub const PIN_LABEL_PX: f32 = 13.0;
+
+// Floors that text stops shrinking at.
+//
+// Canvas text scales with the zoom, but only down to these sizes. Past that,
+// shrinking further just produces a smear -- and zoomed out is precisely when
+// you need to tell one node from another, so the title in particular must stay
+// legible however far out you go.
+const MIN_TITLE_PX: f32 = 10.5;
+const MIN_SUBTITLE_PX: f32 = 9.0;
+const MIN_PIN_LABEL_PX: f32 = 9.5;
+
+pub fn title_font_px(zoom: f32) -> f32 {
+    (TITLE_PX * zoom).max(MIN_TITLE_PX)
+}
+
+pub fn subtitle_font_px(zoom: f32) -> f32 {
+    (SUBTITLE_PX * zoom).max(MIN_SUBTITLE_PX)
+}
+
+pub fn pin_label_font_px(zoom: f32) -> f32 {
+    (PIN_LABEL_PX * zoom).max(MIN_PIN_LABEL_PX)
+}
+
+/// Whether the header still has room for the subtitle beneath a floored title.
+///
+/// The title never disappears; the subtitle is the first thing dropped, because
+/// it only ever restates the node's category.
+pub fn subtitle_fits(zoom: f32) -> bool {
+    HEADER_H * zoom >= title_font_px(zoom) + subtitle_font_px(zoom) + 4.0
+}
+
+/// Whether pin rows are far enough apart, and nodes wide enough, to label pins
+/// without the labels colliding with each other or with the opposite column.
+pub fn pin_labels_fit(zoom: f32) -> bool {
+    ROW_H * zoom >= pin_label_font_px(zoom) + 2.0 && NODE_WIDTH * zoom >= 108.0
+}
+
 /// How the canvas is currently positioned over the graph.
 #[derive(Clone, Copy)]
 pub struct View {
@@ -485,22 +526,40 @@ impl CatPaws {
             );
             painter.rect_stroke(r, 6.0, outline, egui::StrokeKind::Inside);
 
-            if zoom > 0.5 {
-                painter.text(
-                    pos2(r.min.x + 10.0 * zoom, r.min.y + 14.0 * zoom),
+            // Header text is clipped to the header so a floored font can never
+            // spill out of a small node.
+            let text = painter.with_clip_rect(header.intersect(rect));
+            let title_px = title_font_px(zoom);
+            let pad_x = (10.0 * zoom).max(5.0);
+
+            if subtitle_fits(zoom) {
+                let subtitle_px = subtitle_font_px(zoom);
+                let block = title_px + subtitle_px + 4.0;
+                let top = header.center().y - block / 2.0;
+                text.text(
+                    pos2(header.min.x + pad_x, top + title_px / 2.0),
                     Align2::LEFT_CENTER,
                     node.kind.title(),
-                    FontId::proportional(15.5 * zoom),
+                    FontId::proportional(title_px),
                     palette.on_category(),
                 );
-                painter.text(
-                    pos2(r.min.x + 10.0 * zoom, r.min.y + 31.0 * zoom),
+                text.text(
+                    pos2(header.min.x + pad_x, top + title_px + 4.0 + subtitle_px / 2.0),
                     Align2::LEFT_CENTER,
                     node.kind.subtitle(),
-                    FontId::proportional(12.0 * zoom),
+                    FontId::proportional(subtitle_px),
                     // Only slightly dimmed: at this size a heavy fade made the
                     // subtitle unreadable against the header colour.
                     palette.on_category().gamma_multiply(0.88),
+                );
+            } else {
+                // No room for both, so the title takes the whole header.
+                text.text(
+                    pos2(header.min.x + pad_x, header.center().y),
+                    Align2::LEFT_CENTER,
+                    node.kind.title(),
+                    FontId::proportional(title_px),
+                    palette.on_category(),
                 );
             }
 
@@ -566,16 +625,20 @@ impl CatPaws {
                     }
                 }
 
-                if zoom > 0.55 {
+                // Pin labels are the one thing that genuinely cannot survive a
+                // deep zoom-out: the rows themselves become thinner than the
+                // floored text, so labels would overlap each other.
+                if pin_labels_fit(zoom) {
+                    let gap = (11.0 * zoom).max(7.0);
                     let (anchor, x) = match side {
-                        Side::In => (Align2::LEFT_CENTER, center.x + 11.0 * zoom),
-                        Side::Out => (Align2::RIGHT_CENTER, center.x - 11.0 * zoom),
+                        Side::In => (Align2::LEFT_CENTER, center.x + gap),
+                        Side::Out => (Align2::RIGHT_CENTER, center.x - gap),
                     };
                     painter.text(
                         pos2(x, center.y),
                         anchor,
                         &pin.name,
-                        FontId::proportional(13.0 * zoom),
+                        FontId::proportional(pin_label_font_px(zoom)),
                         palette.text_strong,
                     );
                 }
@@ -690,5 +753,74 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 4);
+    }
+
+    /// The whole point of the floors: however far you zoom out, a node's title
+    /// is still rendered at a readable size. This regressed once by hiding text
+    /// below a zoom threshold, which made a zoomed-out graph unidentifiable.
+    #[test]
+    fn titles_stay_readable_at_every_zoom() {
+        // 0.35 is the minimum the view clamps to.
+        for zoom in [0.35_f32, 0.4, 0.5, 0.75, 1.0, 1.6, 2.5] {
+            let px = title_font_px(zoom);
+            assert!(
+                px >= MIN_TITLE_PX,
+                "title font {px} at zoom {zoom} fell under the floor"
+            );
+        }
+    }
+
+    /// Zoomed in, text should track the canvas rather than sit at the floor.
+    #[test]
+    fn text_scales_up_with_zoom() {
+        assert!(title_font_px(2.0) > title_font_px(1.0));
+        assert!(pin_label_font_px(2.0) > pin_label_font_px(1.0));
+        assert_eq!(title_font_px(1.0), TITLE_PX);
+        assert_eq!(pin_label_font_px(1.0), PIN_LABEL_PX);
+    }
+
+    /// The title must always fit the header, including when floored.
+    #[test]
+    fn header_always_has_room_for_the_title() {
+        for zoom in [0.35_f32, 0.4, 0.5, 0.75, 1.0, 2.5] {
+            let header = HEADER_H * zoom;
+            assert!(
+                header >= title_font_px(zoom),
+                "header {header} too short for a {} title at zoom {zoom}",
+                title_font_px(zoom)
+            );
+        }
+    }
+
+    /// The subtitle is dropped only when it genuinely will not fit, and is
+    /// present at normal zoom.
+    #[test]
+    fn subtitle_is_dropped_only_when_it_cannot_fit() {
+        assert!(subtitle_fits(1.0), "subtitle should show at 100%");
+        assert!(!subtitle_fits(0.35), "subtitle cannot fit when fully zoomed out");
+
+        for zoom in [0.35_f32, 0.5, 0.75, 1.0, 2.5] {
+            if subtitle_fits(zoom) {
+                assert!(
+                    HEADER_H * zoom >= title_font_px(zoom) + subtitle_font_px(zoom),
+                    "claimed the subtitle fits at zoom {zoom} when it does not"
+                );
+            }
+        }
+    }
+
+    /// Pin labels are hidden exactly when the rows are too thin for them, so
+    /// they can never overlap each other.
+    #[test]
+    fn pin_labels_never_overlap_their_rows() {
+        for zoom in [0.35_f32, 0.4, 0.5, 0.6, 0.75, 1.0, 2.5] {
+            if pin_labels_fit(zoom) {
+                assert!(
+                    ROW_H * zoom >= pin_label_font_px(zoom),
+                    "labels shown at zoom {zoom} but the row is thinner than the text"
+                );
+            }
+        }
+        assert!(pin_labels_fit(1.0), "pin labels should show at 100%");
     }
 }
