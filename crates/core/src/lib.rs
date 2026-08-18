@@ -14,7 +14,7 @@ pub use compile::{compile, Area, Code, Diagnostic, Expr, Instr, Program};
 pub use graph::{Category, Graph, Link, Node, NodeId, NodeKind, Pin, PinKind, PinRef, Side};
 pub use types::{DataType, Value};
 pub use vm::{run, RunResult};
-pub use wasm::emit;
+pub use wasm::{emit, text};
 pub use written::{generate, Problem};
 
 #[cfg(test)]
@@ -1132,5 +1132,55 @@ mod overflow_tests {
              print 'x'",
         );
         assert_eq!(out, ["-9223372036854775808"], "still wraps once a variable is involved");
+    }
+}
+
+/// Reading a finished module back as text.
+///
+/// Cat Paws has no intermediate language of its own — `compile.rs` builds the instruction
+/// list the *interpreter* runs, which is a second opinion rather than a stage on the way
+/// to WebAssembly. So the module itself is the only honest answer to "what did my program
+/// become", and it has to be readable.
+#[cfg(test)]
+mod wasm_text {
+    use super::*;
+
+    fn wat_of(source: &str) -> String {
+        let mut g = Graph::new();
+        written::generate(&mut g, source).expect("should read");
+        let bytes = wasm::emit(&g).expect("should compile");
+        wasm::text(&bytes).expect("should read back as text")
+    }
+
+    #[test]
+    fn a_module_reads_back_as_webassembly_text() {
+        let wat = wat_of("print string 'hello'");
+        assert!(wat.starts_with("(module"), "not a module:\n{wat}");
+        assert!(wat.contains("(func"), "no functions:\n{wat}");
+        assert!(wat.contains("\"main\""), "main is not exported:\n{wat}");
+    }
+
+    /// The arithmetic a person wrote should be findable in what they are shown, or the
+    /// view teaches nothing.
+    #[test]
+    fn the_arithmetic_is_visible_in_it() {
+        let wat = wat_of("declare 'x' = integer '2'\nset 'x' = 'x' + 'x'\nprint 'x'");
+        assert!(wat.contains("i64.add"), "the addition is missing:\n{wat}");
+        assert!(wat.contains("local.set") || wat.contains("local.tee"), "{wat}");
+    }
+
+    #[test]
+    fn a_loop_shows_the_block_and_loop_pair() {
+        // The idiom from wasm.rs: `loop` only jumps backwards, so leaving needs an
+        // enclosing `block`. Someone reading this should be able to see that.
+        let wat = wat_of("repeat integer '3' {\nprint string 'meow'\n}");
+        assert!(wat.contains("loop"), "no loop:\n{wat}");
+        assert!(wat.contains("block"), "no block:\n{wat}");
+        assert!(wat.contains("br_if"), "no exit branch:\n{wat}");
+    }
+
+    #[test]
+    fn rubbish_is_refused_rather_than_shown_as_text() {
+        assert!(wasm::text(b"not a wasm module at all").is_err());
     }
 }

@@ -320,6 +320,7 @@ name = "cat-paws-core"
 version = "0.1.0"
 dependencies = [
  "wasm-encoder 0.256.0",
+ "wasmprinter 0.256.0",
  "wasmtime",
 ]
 
@@ -2766,6 +2767,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmprinter"
+version = "0.256.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86e15994b4797b3826dc466488a9019975fda659a9746d28c29b9a09fc02c8ea"
+dependencies = [
+ "anyhow",
+ "termcolor",
+ "wasmparser 0.256.0",
+]
+
+[[package]]
 name = "wasmtime"
 version = "38.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2826,7 +2838,7 @@ dependencies = [
  "target-lexicon",
  "wasm-encoder 0.239.0",
  "wasmparser 0.239.0",
- "wasmprinter",
+ "wasmprinter 0.239.0",
 ]
 
 [[package]]

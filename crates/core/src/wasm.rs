@@ -97,6 +97,16 @@ pub fn emit(graph: &Graph) -> Result<Vec<u8>, Vec<Diagnostic>> {
     Ok(e.finish())
 }
 
+/// A finished module as readable text.
+///
+/// The WebAssembly text format — the same bytes, spelled out. Worth showing because Cat
+/// Paws has no intermediate language of its own: `compile.rs` builds the instruction list
+/// the *interpreter* runs, which is a second opinion rather than a stage on the way here.
+/// So this is the only honest answer to "what did my program become".
+pub fn text(module: &[u8]) -> Result<String, String> {
+    wasmprinter::print_bytes(module).map_err(|e| e.to_string())
+}
+
 /// Every string literal in the program, laid out in linear memory.
 #[derive(Default)]
 struct StringTable {

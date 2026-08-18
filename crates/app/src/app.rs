@@ -32,6 +32,8 @@ pub struct CatPaws {
     pub output: Vec<String>,
     pub status: Status,
     pub show_listing: bool,
+    /// Show the WebAssembly the program was compiled to.
+    pub show_wasm: bool,
     /// What is typed in the write box. Never saved — it makes nodes and is cleared.
     pub written: String,
     pub written_problems: Vec<cat_paws_core::written::Problem>,
@@ -79,6 +81,7 @@ impl CatPaws {
             output: Vec::new(),
             status: Status::Stale("not compiled yet".to_string()),
             show_listing: false,
+            show_wasm: false,
             written: String::new(),
             written_problems: Vec::new(),
             new_var_name: String::new(),
@@ -394,11 +397,15 @@ impl CatPaws {
                         self.mode = next;
                         Palette::new(self.mode).apply(ui.ctx());
                     }
+                    ui.checkbox(&mut self.show_wasm, "Show WebAssembly")
+                        .on_hover_text(
+                            "What your program actually became. These are the real \
+                             instructions the browser runs, written out as text.",
+                        );
                     ui.checkbox(&mut self.show_listing, "Show the steps")
                         .on_hover_text(
-                            "The steps your program takes, in order. This is not the \
-                             WebAssembly that actually runs — it is the same program \
-                             written out in a way you can read.",
+                            "The same program in a form you can read. Not what runs — \
+                             that is the WebAssembly.",
                         );
                 });
             });
@@ -850,6 +857,29 @@ impl CatPaws {
                             ui.add_space(3.0);
                         }
                         ui.add_space(6.0);
+                    }
+
+                    if self.show_wasm {
+                        if let Some(bytes) = &self.wasm {
+                            ui.label(
+                                RichText::new(format!(
+                                    "the WebAssembly your program became — {} bytes",
+                                    bytes.len()
+                                ))
+                                .size(12.5)
+                                .color(palette.text_faint),
+                            );
+                            match cat_paws_core::text(bytes) {
+                                Ok(wat) => selectable_block(ui, &wat, palette.text),
+                                Err(e) => {
+                                    ui.label(
+                                        RichText::new(format!("could not read it back: {e}"))
+                                            .color(palette.error),
+                                    );
+                                }
+                            }
+                            ui.add_space(6.0);
+                        }
                     }
 
                     if self.show_listing {
