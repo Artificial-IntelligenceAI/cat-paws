@@ -169,6 +169,14 @@ impl<'a> Emitter<'a> {
             return;
         }
         let Some(kind) = self.graph.kind_of(id).cloned() else {
+            // Matches compile.rs: a chain into a node that no longer exists is reported
+            // rather than quietly ending the program.
+            self.diags.push(Diagnostic::at(
+                VALUE_AS_STEP,
+                id,
+                "the grey wires lead to a node that is not on the canvas any more",
+                "unplug that wire, or undo whatever removed the node",
+            ));
             return;
         };
         self.exec_path.push(id);

@@ -1238,3 +1238,65 @@ mod declare_keeps_the_value {
         assert_eq!(g.vars["n"].initial, Value::Int(41));
     }
 }
+
+/// Comparing whole numbers the two backends must agree on.
+///
+/// The compiled path emits `i64.lt_s`; the interpreter used to go through
+/// `Value::as_number`, which casts to `f64`. Above 2^53 an `f64` cannot tell neighbouring
+/// whole numbers apart, so the two answered differently — and a divergence between the
+/// oracle and the thing it checks is the one failure that makes every other test weaker.
+#[cfg(test)]
+mod comparing_large_numbers {
+    use super::wasm_tests::run_wasm;
+    use super::*;
+
+    fn both_ways(a: i64, b: i64) -> (Vec<String>, Vec<String>) {
+        let src = format!(
+            "declare 'x' = integer '{a}'\n\
+             if 'x' < integer '{b}' {{\n\
+                 print string 'less'\n\
+             }} else {{\n\
+                 print string 'not less'\n\
+             }}"
+        );
+        let mut g = Graph::new();
+        written::generate(&mut g, &src).expect("should read");
+        (
+            vm::run(&compile(&g).expect("bytecode")).output,
+            run_wasm(&wasm::emit(&g).expect("wasm")),
+        )
+    }
+
+    #[test]
+    fn neighbours_past_the_reach_of_a_float_still_compare() {
+        for (a, b) in [
+            (9_007_199_254_740_993_i64, 9_007_199_254_740_994_i64), // just past 2^53
+            (922_337_203_685_477_580, 922_337_203_685_477_581),
+            (i64::MAX - 1, i64::MAX),
+            (i64::MIN, i64::MIN + 1),
+        ] {
+            let (interpreted, compiled) = both_ways(a, b);
+            assert_eq!(interpreted, compiled, "the two backends disagree on {a} < {b}");
+            assert_eq!(interpreted, vec!["less"], "{a} < {b} should be true");
+        }
+    }
+
+    #[test]
+    fn the_larger_number_is_not_less() {
+        for (a, b) in [(i64::MAX, i64::MAX - 1), (9_007_199_254_740_994_i64, 9_007_199_254_740_993)] {
+            let (interpreted, compiled) = both_ways(a, b);
+            assert_eq!(interpreted, compiled, "disagreement on {a} < {b}");
+            assert_eq!(interpreted, vec!["not less"]);
+        }
+    }
+
+    /// Equal is not less, at any size — the boundary the comparison is named after.
+    #[test]
+    fn a_number_is_not_less_than_itself() {
+        for v in [0_i64, 50, i64::MAX, i64::MIN, 9_007_199_254_740_993] {
+            let (interpreted, compiled) = both_ways(v, v);
+            assert_eq!(interpreted, compiled, "disagreement on {v} < {v}");
+            assert_eq!(interpreted, vec!["not less"]);
+        }
+    }
+}

@@ -317,6 +317,15 @@ impl<'a> Compiler<'a> {
             return;
         }
         let Some(kind) = self.graph.kind_of(id).cloned() else {
+            // Same rule on the execution side: a grey wire into a node that is gone
+            // used to end the chain without a word, which reads as a program that
+            // simply stops early.
+            self.diags.push(Diagnostic::at(
+                VALUE_AS_STEP,
+                id,
+                "the grey wires lead to a node that is not on the canvas any more",
+                "unplug that wire, or undo whatever removed the node",
+            ));
             return;
         };
         self.exec_path.push(id);
@@ -522,6 +531,17 @@ impl<'a> Values<'a> {
             return Expr::Lit(expected.default_value());
         }
         let Some(kind) = self.graph.kind_of(id).cloned() else {
+            // Every other fallback in this function announces itself; this one alone
+            // returned 0 in silence. It should be unreachable — `remove_node` drops
+            // every link touching a node and `connect` validates both pins — but a
+            // program that compiles clean and runs wrong is the one outcome this
+            // language exists to refuse, so if the invariant ever breaks it will say so.
+            self.diags.push(Diagnostic::at(
+                NOT_A_VALUE,
+                id,
+                "a wire leads to a node that is not on the canvas any more",
+                "unplug that wire, or undo whatever removed the node",
+            ));
             return Expr::Lit(expected.default_value());
         };
         self.data_path.push(id);

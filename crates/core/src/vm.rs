@@ -85,9 +85,20 @@ fn eval(expr: &Expr, vars: &BTreeMap<String, Value>) -> Result<Value, String> {
         Expr::LessThan(a, b) => {
             let a = eval(a, vars)?;
             let b = eval(b, vars)?;
-            match (a.as_number(), b.as_number()) {
-                (Some(x), Some(y)) => Ok(Value::Bool(x < y)),
-                _ => Err("'less than' needs two numbers".to_string()),
+            match (&a, &b) {
+                // Whole numbers compare as whole numbers.
+                //
+                // Going through `as_number` casts both to f64, which cannot tell apart
+                // two whole numbers above 2^53 — so this answered "not less" for
+                // 9223372036854775806 < 9223372036854775807 while the compiled path,
+                // emitting `i64.lt_s`, answered "less". The two implementations
+                // disagreed exactly where the node cautions say the limit is, which is
+                // the one thing the oracle exists to make impossible.
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Bool(x < y)),
+                _ => match (a.as_number(), b.as_number()) {
+                    (Some(x), Some(y)) => Ok(Value::Bool(x < y)),
+                    _ => Err("'less than' needs two numbers".to_string()),
+                },
             }
         }
         Expr::Arith(op, ty, a, b) => {

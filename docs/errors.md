@@ -202,3 +202,37 @@ while a float quietly stops moving.
 `CP-MATH-01` used to end with *"or floats, which reach much further"*. It no longer does,
 and a test now checks that anywhere the integer ceiling is named, the float one is named
 beside it.
+
+## Nothing in the compiler substitutes a value in silence
+
+Every fallback in `compile.rs` reports before it substitutes. That was almost true and is
+now actually true: `Values::output_expr` returned `Value::Int(0)` without a word when a
+wire's source node was missing from the graph, and both execution walks ended the chain
+just as quietly.
+
+None of the three should be reachable — `Graph::remove_node` drops every link touching a
+node, and `connect` validates both pin indices before storing a link — so this is not a fix
+for a bug anyone can hit today. It is the rule made uniform. A program that compiles clean
+and runs wrong is the single outcome this language exists to refuse, and a fallback that
+stays quiet is how that outcome arrives.
+
+## `Less than` compares whole numbers as whole numbers
+
+Worth recording because it is the only time the two implementations have ever disagreed.
+
+The compiled path emits `i64.lt_s`. The interpreter went through `Value::as_number`, which
+casts to `f64` — and an `f64` cannot tell apart two whole numbers above 2^53. So:
+
+```
+9223372036854775806 < 9223372036854775807
+   interpreter:  not less      ← wrong
+   WebAssembly:  less          ← right
+```
+
+`as_number` existed so one comparison could serve both integers and decimals, but the pins
+on `Less than` are both integers: there was never a decimal case to serve. Integers now
+compare as integers, and the divergence is covered by tests at four sizes, including either
+side of 2^53 and both ends of the range.
+
+A disagreement between the oracle and the thing it checks is worse than an ordinary bug: it
+makes every other test weaker, because agreement stops meaning what it is supposed to mean.
