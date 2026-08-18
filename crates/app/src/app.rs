@@ -40,6 +40,12 @@ pub struct CatPaws {
     new_var_type: DataType,
     /// Remembered so palette buttons can drop new nodes into the middle of the view.
     pub(crate) last_canvas: Rect,
+    /// The node being dragged out of the palette, if one is.
+    ///
+    /// Held on the app rather than passed around because the drag begins in the side
+    /// panel and ends over the canvas — two different `Ui`s, which share nothing but
+    /// this struct and the pointer.
+    dragging_new: Option<NodeKind>,
 
     /// Graph snapshots from *before* each change, oldest first.
     ///
@@ -78,6 +84,7 @@ impl CatPaws {
             new_var_name: String::new(),
             new_var_type: DataType::Int,
             last_canvas: Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            dragging_new: None,
             undo_stack: Vec::new(),
         }
     }
@@ -211,6 +218,100 @@ impl CatPaws {
         let id = self.graph.add_node(kind, (center.x - 98.0, center.y - 40.0));
         self.selected = Some(id);
         self.mark_stale();
+    }
+
+    /// How far the node hangs below and right of the pointer while carried.
+    ///
+    /// The same offset is used to draw it and to place it, so what you let go of is what
+    /// you get — you are holding the node by its header, not by its corner.
+    const GRAB: egui::Vec2 = egui::vec2(28.0, 16.0);
+
+    /// Where a carried node is drawn, in screen space.
+    pub(crate) fn carried_rect(view: &View, pointer: egui::Pos2, kind: &NodeKind) -> Rect {
+        Rect::from_min_size(
+            pointer - Self::GRAB * view.zoom,
+            crate::canvas::node_size(kind) * view.zoom,
+        )
+    }
+
+    /// Where it lands, in world space.
+    ///
+    /// Paired with `carried_rect` on purpose: these two have to describe the same place
+    /// or the node jumps the instant you let go of it, which is the whole feel of the
+    /// gesture. A test holds them together.
+    pub(crate) fn dropped_position(view: &View, canvas: Rect, pointer: egui::Pos2) -> (f32, f32) {
+        let at = view.to_world(canvas, pointer);
+        (at.x - Self::GRAB.x, at.y - Self::GRAB.y)
+    }
+
+    /// Draw whatever is being carried out of the palette, and let go of it.
+    fn ui_dragging_node(&mut self, ui: &mut egui::Ui) {
+        let Some(kind) = self.dragging_new.clone() else {
+            return;
+        };
+        let ctx = ui.ctx().clone();
+        let Some(pointer) = ctx.input(|i| i.pointer.hover_pos()) else {
+            // The pointer left the window mid-drag; drop the whole gesture rather than
+            // leaving a node stuck to a cursor that is not there.
+            self.dragging_new = None;
+            return;
+        };
+
+        let zoom = self.view.zoom;
+        let palette = self.palette();
+        let over_canvas = self.last_canvas.contains(pointer);
+
+        // Painted on the foreground layer so it rides over the side panel it came from.
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("cp-carried-node"),
+        ));
+        let rect = Self::carried_rect(&self.view, pointer, &kind);
+        // Faded, and fainter still when it would not land anywhere — the preview says
+        // whether letting go will do something.
+        let fade = if over_canvas { 0.85 } else { 0.35 };
+        let header = egui::Rect::from_min_size(
+            rect.min,
+            egui::vec2(rect.width(), crate::canvas::HEADER_H * zoom),
+        );
+        painter.rect_filled(rect, 6.0, palette.node_body.gamma_multiply(fade));
+        painter.rect_filled(
+            header,
+            6.0,
+            palette.category_color(kind.category()).gamma_multiply(fade),
+        );
+        painter.rect_stroke(
+            rect,
+            6.0,
+            egui::Stroke::new(1.0, palette.node_outline),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            egui::pos2(header.min.x + 10.0 * zoom, header.center().y),
+            egui::Align2::LEFT_CENTER,
+            kind.title(),
+            egui::FontId::proportional(crate::canvas::title_font_px(zoom)),
+            palette.on_category().gamma_multiply(fade),
+        );
+
+        ctx.set_cursor_icon(if over_canvas {
+            egui::CursorIcon::Grabbing
+        } else {
+            egui::CursorIcon::NotAllowed
+        });
+
+        if ctx.input(|i| i.pointer.any_released()) {
+            self.dragging_new = None;
+            if over_canvas {
+                let at = Self::dropped_position(&self.view, self.last_canvas, pointer);
+                self.push_undo();
+                let id = self.graph.add_node(kind, at);
+                self.selected = Some(id);
+                self.mark_stale();
+            }
+        }
+        // A carried node has to keep up with the pointer between events.
+        ctx.request_repaint();
     }
 
     fn ui_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -412,13 +513,22 @@ impl CatPaws {
                     ];
                     for (label, kind) in buttons {
                         let color = palette.category_color(kind.category());
-                        if ui
-                            .add(egui::Button::new(RichText::new(label).color(palette.text_strong))
+                        let r = ui.add(
+                            egui::Button::new(RichText::new(label).color(palette.text_strong))
                                 .fill(color.gamma_multiply(0.28))
-                                .min_size(egui::vec2(ui.available_width(), 24.0)))
-                            .clicked()
-                        {
+                                .min_size(egui::vec2(ui.available_width(), 24.0))
+                                .sense(egui::Sense::click_and_drag()),
+                        );
+                        // Drag to place it where you let go; click to drop it in the
+                        // middle of the view. Clicking still works because a button that
+                        // does nothing when clicked reads as broken, whatever it says.
+                        if r.drag_started() {
+                            self.dragging_new = Some(kind.clone());
+                        } else if r.clicked() {
                             self.add_node(kind);
+                        }
+                        if r.hovered() || r.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                         }
                     }
 
@@ -765,6 +875,9 @@ impl eframe::App for CatPaws {
                 self.last_canvas = ui.available_rect_before_wrap();
                 self.ui_canvas(ui);
             });
+
+        // After the panels, so the carried node is drawn over all of them.
+        self.ui_dragging_node(ui);
     }
 }
 
@@ -1038,5 +1151,85 @@ mod rule_display_tests {
             diag(NO_SUCH_VAR),
         ];
         assert_eq!(rules_to_show(&diags), vec![true, true, false, true]);
+    }
+}
+
+#[cfg(test)]
+mod dragging_out_of_the_palette {
+    use super::*;
+    use crate::canvas::node_size;
+
+    fn canvas() -> Rect {
+        Rect::from_min_size(egui::pos2(240.0, 70.0), egui::vec2(900.0, 640.0))
+    }
+
+    /// The node has to land exactly where the preview was, or it jumps the moment you
+    /// let go — which is the entire feel of dragging something out.
+    ///
+    /// The two are computed in different spaces: the preview in screen pixels, the drop
+    /// in world units. They agree only because the grab offset is scaled by the zoom in
+    /// one and not the other, which is precisely the sort of thing that survives review
+    /// and fails in the hand.
+    #[test]
+    fn what_you_let_go_of_is_where_it_lands() {
+        let kind = NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int };
+        for zoom in [0.4_f32, 0.75, 1.0, 1.6, 2.5] {
+            for pointer in [
+                egui::pos2(300.0, 120.0),
+                egui::pos2(700.0, 400.0),
+                egui::pos2(1100.0, 690.0),
+            ] {
+                let view = View { zoom, ..Default::default() };
+                let preview = CatPaws::carried_rect(&view, pointer, &kind);
+                let dropped = CatPaws::dropped_position(&view, canvas(), pointer);
+                let landed = view.to_screen(canvas(), egui::pos2(dropped.0, dropped.1));
+                assert!(
+                    (landed - preview.min).length() < 0.01,
+                    "at zoom {zoom} from {pointer:?}: preview at {:?}, landed at {landed:?}",
+                    preview.min
+                );
+            }
+        }
+    }
+
+    /// You hold it by the header, not by a corner — otherwise the pointer sits in empty
+    /// space above the node and the drop feels like it went somewhere else.
+    #[test]
+    fn the_pointer_holds_the_node_by_its_header() {
+        let kind = NodeKind::LitInt(0);
+        let view = View::default();
+        let pointer = egui::pos2(600.0, 300.0);
+        let rect = CatPaws::carried_rect(&view, pointer, &kind);
+        assert!(rect.contains(pointer), "the pointer should be on the node it is carrying");
+        assert!(
+            pointer.y - rect.min.y < crate::canvas::HEADER_H,
+            "the pointer should be within the header, not down in the body"
+        );
+    }
+
+    /// Dropping a bigger node must not place it differently from a small one — the grab
+    /// point is a fixed offset, not a fraction of the size.
+    #[test]
+    fn every_node_is_held_at_the_same_spot() {
+        let view = View::default();
+        let pointer = egui::pos2(500.0, 250.0);
+        let small = CatPaws::carried_rect(&view, pointer, &NodeKind::LitBool(true));
+        let big = CatPaws::carried_rect(&view, pointer, &NodeKind::Branch);
+        assert_eq!(small.min, big.min);
+        assert_ne!(
+            node_size(&NodeKind::LitBool(true)),
+            node_size(&NodeKind::Branch),
+            "this test is meaningless if the two are the same size"
+        );
+    }
+
+    /// Clicking still works. A button that does nothing when clicked reads as broken,
+    /// whatever the label says.
+    #[test]
+    fn clicking_a_palette_button_still_adds_a_node() {
+        let mut app = CatPaws::fresh();
+        let before = app.graph.node_ids().len();
+        app.add_node(NodeKind::LitInt(7));
+        assert_eq!(app.graph.node_ids().len(), before + 1);
     }
 }
