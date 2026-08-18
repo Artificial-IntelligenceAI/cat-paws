@@ -612,7 +612,11 @@ impl CatPaws {
                 // keystroke: snapshot when a drag or a focus begins. A checkbox
                 // has no such session, so its single change is the whole edit.
                 let (r, one_shot) = match &mut decl.initial {
-                    Value::Int(v) => (int_drag(ui, v), false),
+                    Value::Int(v) => {
+                        let (r, done) = int_field(ui, v, &format!("var-int-{name}"));
+                        edited |= done;
+                        (r, false)
+                    }
                     Value::Float(v) => (ui.add(egui::DragValue::new(v).speed(0.1)), false),
                     Value::Bool(v) => (ui.checkbox(v, ""), true),
                     Value::Str(v) => (ui.text_edit_singleline(v), false),
@@ -659,16 +663,28 @@ impl CatPaws {
                     }
                 });
         });
-        let can_add = !self.new_var_name.trim().is_empty();
+        // A name already in the panel cannot be added again. `declare_var` inserts a
+        // fresh declaration, so re-adding one silently threw away its starting value and
+        // could change its type under every node already using it. The written form had
+        // the same hole and was closed; this is the button.
+        let wanted = self.new_var_name.trim().to_string();
+        let taken = self.graph.vars.contains_key(&wanted);
+        let can_add = !wanted.is_empty() && !taken;
         if ui
             .add_enabled(can_add, egui::Button::new("Add variable"))
             .clicked()
         {
-            let name = self.new_var_name.trim().to_string();
             self.push_undo();
-            self.graph.declare_var(name, self.new_var_type);
+            self.graph.declare_var(wanted.clone(), self.new_var_type);
             self.new_var_name.clear();
             self.mark_stale();
+        }
+        if taken {
+            ui.label(
+                RichText::new(format!("there is already a variable called '{wanted}'"))
+                    .size(12.0)
+                    .color(self.palette().text_faint),
+            );
         }
 
         if edit_began {
@@ -730,13 +746,20 @@ impl CatPaws {
         let before = self.graph.clone();
         let mut edit_began = false;
         let mut edited = false;
+        // A whole-number field commits when it is left, not while it is being typed, so
+        // it reports separately from `Response::changed`.
+        let mut edited_int = false;
 
         {
             let node = self.graph.node_mut(id).expect("checked just above");
             ui.label(RichText::new(node.kind.title()).strong());
 
             let widget = match &mut node.kind {
-                NodeKind::LitInt(v) => Some((int_drag(ui, v), false)),
+                NodeKind::LitInt(v) => {
+                    let (r, done) = int_field(ui, v, &format!("lit-{id:?}"));
+                    edited_int = done;
+                    Some((r, false))
+                }
                 NodeKind::LitFloat(v) => {
                     Some((ui.add(egui::DragValue::new(v).speed(0.1)), false))
                 }
@@ -773,7 +796,11 @@ impl CatPaws {
                 ui.horizontal(|ui| {
                     ui.label("starts at");
                     let (r, one_shot) = match &mut decl.initial {
-                        Value::Int(v) => (int_drag(ui, v), false),
+                        Value::Int(v) => {
+                            let (r, done) = int_field(ui, v, &format!("node-var-{name}"));
+                            edited |= done;
+                            (r, false)
+                        }
                         Value::Float(v) => (ui.add(egui::DragValue::new(v).speed(0.1)), false),
                         Value::Bool(v) => (ui.checkbox(v, ""), true),
                         Value::Str(v) => (ui.text_edit_singleline(v), false),
@@ -798,7 +825,7 @@ impl CatPaws {
         if edit_began {
             self.remember(before);
         }
-        if edited {
+        if edited || edited_int {
             self.mark_stale();
         }
 
@@ -1414,12 +1441,52 @@ pub(crate) fn whole_number(text: &str) -> Option<i64> {
     cleaned.parse::<i64>().ok()
 }
 
-fn int_drag(ui: &mut egui::Ui, v: &mut i64) -> egui::Response {
-    ui.add(
-        egui::DragValue::new(v)
-            .custom_formatter(|n, _| (n as i64).to_string())
-            .custom_parser(|s| whole_number(s).map(|i| i as f64)),
-    )
+/// A whole-number field that holds every whole number a Cat Paws integer can.
+///
+/// A text field rather than a `DragValue`, and not for want of trying. `DragValue` carries
+/// every value through an `f64`, which holds whole numbers exactly only up to 9,007,199,254,740,992
+/// — while an integer here goes to 9,223,372,036,854,775,807, a thousand times further.
+/// Anything in that gap was rounded on every edit. It also re-parsed on each keystroke, so
+/// a number typed halfway landed as a real value: typing the maximum plus one left
+/// 922337203685477632 behind, being the longest prefix that parsed, rounded by the f64.
+///
+/// So: the text is held beside the number, not in it. Nothing is committed until the field
+/// is left, and text that is not a whole number is shown in the error colour and simply
+/// never commits — which is what the node caution has always promised.
+pub(crate) fn int_field(ui: &mut egui::Ui, v: &mut i64, salt: &str) -> (egui::Response, bool) {
+    let id = ui.make_persistent_id(salt);
+    // While the field has focus its text lives in egui's temporary store; the rest of the
+    // time it is simply the number, so an edit elsewhere is reflected immediately.
+    let mut text = ui
+        .data_mut(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| v.to_string());
+
+    let readable = whole_number(&text).is_some();
+    let mut edit = egui::TextEdit::singleline(&mut text)
+        .id(id)
+        .desired_width(178.0);
+    if !readable {
+        edit = edit.text_color(ui.visuals().error_fg_color);
+    }
+    let r = ui.add(edit);
+
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    }
+
+    // egui reports `lost_focus` for Enter in a single-line field as well as for clicking
+    // away, so one branch covers both ways of finishing.
+    let mut committed = false;
+    if r.lost_focus() {
+        if let Some(n) = whole_number(&text) {
+            if n != *v {
+                *v = n;
+                committed = true;
+            }
+        }
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    (r, committed)
 }
 
 /// Monospace text you can select and copy.
@@ -1561,13 +1628,13 @@ mod whole_numbers_read_true {
     /// `DragValue` carries values as `f64`, and above 2^53 an `f64` cannot hold every
     /// `i64`. The number stored was always right; the number *shown* was not.
     fn shown(stored: i64) -> String {
-        // Exactly what the widget does: value out as f64, formatted by our formatter.
-        let as_f64 = stored as f64;
-        (as_f64 as i64).to_string()
+        // What the text field shows when it does not have focus: the number itself.
+        stored.to_string()
     }
 
     fn typed(text: &str) -> Option<i64> {
-        super::whole_number(text).map(|i| i as f64).map(|f| f as i64)
+        // The field commits only what `whole_number` can read, with no f64 in the path.
+        super::whole_number(text)
     }
 
     #[test]
@@ -1609,6 +1676,39 @@ mod whole_numbers_read_true {
         assert_eq!(typed("1 000 000"), Some(1_000_000), "spaces group numbers too");
         assert_eq!(typed("1_000_000"), Some(1_000_000), "and underscores, as in code");
         assert_eq!(typed("−42"), Some(-42), "the minus egui itself displays");
+    }
+
+    /// The case that started this: one past the top.
+    ///
+    /// egui's own path saturated it to the maximum. The comma fix earlier in this session
+    /// replaced that with a plain `parse`, which fails — and a failed parse silently kept
+    /// whatever prefix had last parsed, rounded through the f64: typing the maximum plus
+    /// one left 922337203685477632 in the field. A text field commits nothing it cannot
+    /// read, so the number simply stays as it was.
+    #[test]
+    fn one_past_the_top_is_not_quietly_turned_into_something_else() {
+        assert_eq!(typed("9223372036854775808"), None);
+        assert_eq!(typed("9,223,372,036,854,775,808"), None);
+        assert_eq!(typed("-9223372036854775809"), None);
+        // And the value that used to appear is not something anyone can now land on.
+        assert_ne!(typed("9,223,372,036,854,775,808"), Some(922337203685477632));
+    }
+
+    /// Every whole number the language allows survives the field exactly — including the
+    /// range above 2^53 where an f64 cannot tell neighbours apart.
+    #[test]
+    fn numbers_past_the_reach_of_a_float_are_exact() {
+        for v in [
+            9_007_199_254_740_993_i64,      // 2^53 + 1, the first f64 cannot hold
+            922_337_203_685_477_580,
+            922_337_203_685_477_581,        // its neighbour: an f64 rounds both the same
+            i64::MAX - 1,
+            i64::MAX,
+            i64::MIN,
+        ] {
+            assert_eq!(typed(&v.to_string()), Some(v), "{v} did not survive typing");
+            assert_eq!(shown(v), v.to_string(), "{v} did not survive display");
+        }
     }
 
     /// Anything that is not a whole number is refused rather than rounded into one.
