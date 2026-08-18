@@ -394,7 +394,12 @@ impl CatPaws {
                         self.mode = next;
                         Palette::new(self.mode).apply(ui.ctx());
                     }
-                    ui.checkbox(&mut self.show_listing, "Show compiled code");
+                    ui.checkbox(&mut self.show_listing, "Show the steps")
+                        .on_hover_text(
+                            "The steps your program takes, in order. This is not the \
+                             WebAssembly that actually runs — it is the same program \
+                             written out in a way you can read.",
+                        );
                 });
             });
             ui.add_space(4.0);
@@ -716,6 +721,29 @@ impl CatPaws {
         }
     }
 
+    /// Everything in the console as plain text.
+    ///
+    /// Written the way it reads on screen, errors first, because the reason to copy this
+    /// is almost always to show it to somebody who is not looking at your screen.
+    fn console_text(&self) -> String {
+        let mut out = String::new();
+        for d in &self.diagnostics {
+            out.push_str(&format!("• {}\n", d.message));
+            if !d.fix.is_empty() {
+                out.push_str(&format!("  try: {}\n", d.fix));
+            }
+            out.push_str(&format!("  {}\n", d.code.render()));
+        }
+        if !self.output.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&self.output.join("\n"));
+            out.push('\n');
+        }
+        out
+    }
+
     fn ui_bottom(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette();
         egui::Panel::bottom("console")
@@ -728,7 +756,21 @@ impl CatPaws {
                     Status::Ok(m) => (m.clone(), palette.category_color(Category::Event)),
                     Status::Failed(m) => (m.clone(), palette.error),
                 };
-                ui.label(RichText::new(text).color(color).strong());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(text).color(color).strong());
+                    // Right-aligned, so it does not sit between the reader and the
+                    // status line they came here to read.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let anything = !self.output.is_empty() || !self.diagnostics.is_empty();
+                        if ui
+                            .add_enabled(anything, egui::Button::new("Copy").small())
+                            .on_hover_text("Copy everything below — errors and output")
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(self.console_text());
+                        }
+                    });
+                });
                 ui.add_space(4.0);
 
                 let mut jump_to: Option<NodeId> = None;
@@ -813,13 +855,12 @@ impl CatPaws {
                     if self.show_listing {
                         if let Some(program) = &self.program {
                             ui.label(
-                                RichText::new("compiled program")
+                                RichText::new("the steps, in order")
                                     .size(12.5)
                                     .color(palette.text_faint),
                             );
-                            for line in program.listing() {
-                                ui.label(RichText::new(line).monospace().color(palette.text));
-                            }
+                            let listing = program.listing().join("\n");
+                            selectable_block(ui, &listing, palette.text);
                             ui.add_space(6.0);
                         }
                     }
@@ -831,9 +872,7 @@ impl CatPaws {
                                 .color(palette.text_faint),
                         );
                     } else {
-                        for line in &self.output {
-                            ui.label(RichText::new(line).monospace().color(palette.text_strong));
-                        }
+                        selectable_block(ui, &self.output.join("\n"), palette.text_strong);
                     }
                 });
 
@@ -1231,5 +1270,58 @@ mod dragging_out_of_the_palette {
         let before = app.graph.node_ids().len();
         app.add_node(NodeKind::LitInt(7));
         assert_eq!(app.graph.node_ids().len(), before + 1);
+    }
+}
+
+/// Monospace text you can select and copy.
+///
+/// A run of `ui.label`s cannot be dragged across — each one is its own widget, so a
+/// selection stops at the end of a line and the clipboard gets one line at a time. A
+/// read-only `TextEdit` is one widget over the whole block, so selection and Cmd+C behave
+/// the way they do everywhere else.
+fn selectable_block(ui: &mut egui::Ui, text: &str, color: egui::Color32) {
+    // `&mut &str` is how egui takes text it must not modify: the widget still handles
+    // selection, focus and copying, and simply discards any edit.
+    let mut view = text;
+    ui.add(
+        egui::TextEdit::multiline(&mut view)
+            .font(egui::TextStyle::Monospace)
+            .text_color(color)
+            .desired_width(f32::INFINITY)
+            // No box drawn around it: this is console output, not a field to fill in.
+            .frame(egui::Frame::NONE)
+            .margin(egui::vec2(0.0, 0.0)),
+    );
+}
+
+#[cfg(test)]
+mod copying_the_console {
+    use super::*;
+
+    #[test]
+    fn copied_text_carries_the_error_the_fix_and_the_code() {
+        let mut app = CatPaws::fresh();
+        app.graph = Graph::new(); // no Event start, so compiling must fail
+        app.compile();
+        let text = app.console_text();
+        assert!(text.contains("Event start"), "the message is missing:\n{text}");
+        assert!(text.contains("try:"), "the fix is missing:\n{text}");
+        assert!(text.contains("CP-FLOW-01"), "the code is missing:\n{text}");
+    }
+
+    #[test]
+    fn copied_text_carries_what_the_program_printed() {
+        let mut app = CatPaws::fresh();
+        app.output = vec!["low health".to_string(), "42".to_string()];
+        let text = app.console_text();
+        assert!(text.contains("low health") && text.contains("42"), "{text}");
+    }
+
+    /// Nothing to copy means nothing copied — an empty clipboard is better than a stray
+    /// blank line someone pastes into a message wondering why it is empty.
+    #[test]
+    fn an_empty_console_copies_nothing() {
+        let app = CatPaws::fresh();
+        assert!(app.console_text().is_empty());
     }
 }
