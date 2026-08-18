@@ -200,41 +200,61 @@ impl NodeKind {
     pub fn caution(&self) -> Option<&'static str> {
         match self {
             NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int } => Some(
-                "Dividing whole numbers throws the remainder away: 7 ÷ 2 is 3, not 3.5. \
-                 Use floats if you need the part after the point.\n\n\
-                 Dividing by zero has no answer, so it stops the program.",
+                "Dividing whole numbers throws the remainder away: 7 ÷ 2 is 3, not 3.5.\n\n\
+                 What that means: an average worked out this way comes out too low, and \
+                 splitting something into equal shares quietly loses the leftovers. Use \
+                 floats if you need the part after the point.\n\n\
+                 Dividing by zero has no answer, so it stops the program then and there — \
+                 nothing after it runs.",
             ),
             NodeKind::Arith { ty: DataType::Int, .. } => Some(
                 "Whole numbers only reach 9,223,372,036,854,775,807. Going past that wraps \
                  around to a large negative number instead of growing.\n\n\
+                 What that means: a counter climbing inside a Repeat can turn negative \
+                 partway through and carry on as if nothing happened. Comparisons flip \
+                 over, and everything printed after that point is wrong.\n\n\
                  Cat Paws refuses this while compiling when both numbers are written on the \
                  canvas — but it cannot see it coming when one of them arrives from a \
-                 variable, so a sum inside a loop can still wrap.",
+                 variable.",
             ),
             NodeKind::Arith { ty: DataType::Float, .. } => Some(
-                "Decimals are approximate. 0.1 + 0.2 does not come out as exactly 0.3, and \
-                 very large decimals quietly lose their smallest digits.\n\n\
+                "Decimals are approximate. 0.1 + 0.2 does not come out as exactly 0.3.\n\n\
+                 What that means: checking whether two decimals are exactly equal can come \
+                 out false even when the maths says they match, and adding many small \
+                 decimals together drifts further from the true answer the more you add.\n\n\
                  This is how decimals work on every computer, not something Cat Paws does.",
             ),
             NodeKind::Repeat => Some(
-                "The count is read once, before the first pass. Changing it from inside the \
-                 loop does not make the loop longer or shorter.\n\n\
-                 A count of zero, or less, runs the body no times at all.",
+                "The count is read once, before the first pass.\n\n\
+                 What that means: changing it from inside the loop does nothing at all. The \
+                 loop runs the number of times it started with, however much you alter that \
+                 variable partway through.\n\n\
+                 A count of zero, or less, runs the body no times.",
             ),
             NodeKind::Branch => Some(
-                "Each path ends where it ends. Nothing can carry on after a Branch, so steps \
-                 that should happen either way have to go inside both arms.",
+                "Each path ends where it ends. Nothing can carry on after a Branch.\n\n\
+                 What that means: a step that should happen whichever way the answer goes \
+                 has to be put inside both arms. Miss one and that path quietly does less \
+                 than you meant, with no error to tell you.",
             ),
             NodeKind::LessThan => Some(
-                "Whole numbers only, and strictly less than — 5 < 5 is false.",
+                "Whole numbers only, and strictly less than — 5 < 5 is false.\n\n\
+                 What that means: a loop guarded with \"less than 10\" stops at 9, not 10, \
+                 and comparing something with itself is always false.",
             ),
             NodeKind::LitInt(_) => Some(
                 "A whole number here goes from -9,223,372,036,854,775,808 up to \
-                 9,223,372,036,854,775,807.",
+                 9,223,372,036,854,775,807.\n\n\
+                 What that means: typing something bigger is refused straight away — but \
+                 *reaching* something bigger by adding is not, and that wraps around to a \
+                 negative number instead.",
             ),
             NodeKind::LitFloat(_) => Some(
                 "Some decimals change the moment they are typed, because a computer stores \
-                 them in halves, quarters and eighths. 0.1 is really slightly more than 0.1.",
+                 them in halves, quarters and eighths. 0.1 is really slightly more than 0.1.\n\n\
+                 What that means: printing it back can show something a little different \
+                 from what you typed, and two decimals that look identical on screen are \
+                 not always equal.",
             ),
             _ => None,
         }

@@ -1075,3 +1075,65 @@ mod caution_icon {
         assert_ne!(divide, add);
     }
 }
+
+#[cfg(test)]
+mod caution_wording {
+    use cat_paws_core::graph::ArithOp;
+    use cat_paws_core::{DataType, NodeKind};
+
+    fn all_cautions() -> Vec<(&'static str, &'static str)> {
+        [
+            ("add int", NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int }),
+            ("divide int", NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int }),
+            ("add float", NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float }),
+            ("repeat", NodeKind::Repeat),
+            ("branch", NodeKind::Branch),
+            ("less than", NodeKind::LessThan),
+            ("int literal", NodeKind::LitInt(0)),
+            ("float literal", NodeKind::LitFloat(0.0)),
+        ]
+        .into_iter()
+        .map(|(name, kind)| (name, kind.caution().expect("should carry a caution")))
+        .collect()
+    }
+
+    /// Describing the behaviour is only half of it. "Whole numbers wrap around" tells you
+    /// what happens; it does not tell you that your counter will silently go negative and
+    /// every number printed afterwards will be wrong. Every caution has to answer the
+    /// second question too.
+    #[test]
+    fn every_caution_says_what_it_means_for_you() {
+        for (name, text) in all_cautions() {
+            assert!(
+                text.contains("What that means:"),
+                "the caution on {name} says what happens but not what it costs you:\n{text}"
+            );
+        }
+    }
+
+    /// A tooltip nobody finishes reading protects nobody.
+    #[test]
+    fn no_caution_runs_longer_than_a_tooltip() {
+        for (name, text) in all_cautions() {
+            assert!(
+                text.len() < 520,
+                "the caution on {name} is {} characters — too long to read on hover",
+                text.len()
+            );
+        }
+    }
+
+    /// The consequence has to come after the behaviour: what happened, then why it
+    /// matters. The other order reads as a warning with no cause.
+    #[test]
+    fn the_behaviour_comes_before_the_consequence() {
+        for (name, text) in all_cautions() {
+            let at = text.find("What that means:").expect("checked above");
+            assert!(at > 0, "{name} opens with the consequence and never says the cause");
+            assert!(
+                text[..at].trim().len() > 20,
+                "{name} barely describes the behaviour before explaining it"
+            );
+        }
+    }
+}

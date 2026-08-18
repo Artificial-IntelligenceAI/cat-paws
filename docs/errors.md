@@ -155,6 +155,11 @@ first.
 
 Only nodes with a genuine sharp edge carry one:
 
+Each one is in two halves: what the node does, then **what that means for you**. The first
+half alone is not much use — "whole numbers wrap around" tells a beginner what happens,
+not that their counter will silently go negative and every number after it will be wrong.
+A test enforces that both halves are present, and that they come in that order.
+
 | Node | What it warns about |
 |---|---|
 | whole-number `+ − ×` | the ceiling, and that going past it wraps around silently |
