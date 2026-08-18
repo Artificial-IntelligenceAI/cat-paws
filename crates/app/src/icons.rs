@@ -14,6 +14,8 @@ pub enum Icon {
     Play,
     /// Undo the last change.
     Undo,
+    /// Something about this node is worth knowing before you trust it.
+    Info,
 }
 
 /// Draws the icon centred in `rect`.
@@ -92,6 +94,18 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 color,
                 Stroke::NONE,
             ));
+        }
+        Icon::Info => {
+            // A ring with a dot and a stem. Drawn rather than typed, for the same
+            // reason as the others: a glyph would fall back differently per platform,
+            // and this one has to stay legible at eleven pixels.
+            let r = s * 0.44;
+            painter.circle_stroke(c, r, Stroke::new((s * 0.09).max(1.0), color));
+            painter.circle_filled(c + vec2(0.0, -r * 0.44), (s * 0.07).max(0.9), color);
+            painter.line_segment(
+                [c + vec2(0.0, -r * 0.08), c + vec2(0.0, r * 0.46)],
+                Stroke::new((s * 0.13).max(1.2), color),
+            );
         }
     }
 }

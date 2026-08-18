@@ -150,6 +150,20 @@ fn node_rect(view: &View, rect: Rect, pos: (f32, f32), kind: &NodeKind) -> Rect 
     Rect::from_min_size(top_left, node_size(kind) * view.zoom)
 }
 
+/// Where a node's caution icon sits: the right end of its header.
+///
+/// One function for drawing and for hit-testing, so the thing you click is always the
+/// thing you can see.
+fn info_rect(view: &View, rect: Rect, pos: (f32, f32), kind: &NodeKind) -> Rect {
+    let r = node_rect(view, rect, pos, kind);
+    let size = (14.0 * view.zoom).clamp(9.0, 22.0);
+    let pad = (10.0 * view.zoom).max(5.0);
+    Rect::from_center_size(
+        pos2(r.max.x - pad - size / 2.0, r.min.y + HEADER_H * view.zoom / 2.0),
+        vec2(size, size),
+    )
+}
+
 fn pin_screen_pos(view: &View, rect: Rect, graph: &Graph, r: PinRef) -> Option<Pos2> {
     let node = graph.node(r.node)?;
     let offset = pin_offset(&node.kind, r.side, r.index);
@@ -232,7 +246,24 @@ impl CatPaws {
         self.handle_interaction(ui, &response, rect);
         self.draw_wires(&painter, rect, &palette);
         self.draw_pending_wire(&painter, rect, &palette, pointer, hovered_pin);
-        self.draw_nodes(&painter, rect, &palette, hovered_pin);
+        self.draw_nodes(&painter, rect, &palette, hovered_pin, pointer);
+
+        // The caution itself, once the pointer is on the icon. A tooltip rather than
+        // something always on screen: it is a thing to look up, not a thing to read
+        // every time you glance at the canvas.
+        if let Some(caution) = pointer.and_then(|p| self.caution_at(rect, p)) {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                egui::Id::new("node-caution"),
+                egui::PopupAnchor::Pointer,
+            )
+            .gap(12.0)
+            .show(|ui| {
+                ui.set_max_width(300.0);
+                ui.label(caution);
+            });
+        }
 
         if hovered_pin.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -567,6 +598,7 @@ impl CatPaws {
         rect: Rect,
         palette: &Palette,
         hovered_pin: Option<PinRef>,
+        pointer: Option<Pos2>,
     ) {
         let zoom = self.view.zoom;
         let failing = self.failing_nodes();
@@ -640,8 +672,34 @@ impl CatPaws {
                 );
             }
 
+            if node.kind.caution().is_some() {
+                let icon = info_rect(&self.view, rect, node.pos, &node.kind);
+                let lit = pointer.is_some_and(|p| icon.contains(p));
+                crate::icons::paint_icon(
+                    &text,
+                    icon,
+                    crate::icons::Icon::Info,
+                    // Quiet until you go near it: a permanent bright mark on half the
+                    // nodes reads as an error, and none of these are errors.
+                    palette.on_category().gamma_multiply(if lit { 1.0 } else { 0.55 }),
+                );
+            }
+
             self.draw_pins(painter, rect, palette, node.id, hovered_pin);
         }
+    }
+
+    /// The caution of whichever node's info icon is under `screen`, if any.
+    fn caution_at(&self, rect: Rect, screen: Pos2) -> Option<&'static str> {
+        let mut found = None;
+        for node in self.graph.nodes() {
+            if let Some(caution) = node.kind.caution() {
+                if info_rect(&self.view, rect, node.pos, &node.kind).contains(screen) {
+                    found = Some(caution);
+                }
+            }
+        }
+        found
     }
 
     fn draw_pins(
@@ -919,5 +977,101 @@ mod tests {
         assert_eq!(subtitle_tracking_px(0.35), subtitle_tracking_px(0.1));
         // Zoomed in it grows with the text.
         assert!(subtitle_tracking_px(2.5) > subtitle_tracking_px(1.0));
+    }
+}
+
+#[cfg(test)]
+mod caution_icon {
+    use super::*;
+    use cat_paws_core::graph::ArithOp;
+    use cat_paws_core::{DataType, NodeKind};
+
+    fn canvas_rect() -> Rect {
+        Rect::from_min_size(pos2(220.0, 60.0), vec2(900.0, 700.0))
+    }
+
+    /// Where the icon is drawn and where it is clicked come from the same function, so
+    /// the only way they can disagree is if it leaves the node — which at some zoom
+    /// levels it very nearly does.
+    #[test]
+    fn the_icon_stays_inside_its_own_header() {
+        let rect = canvas_rect();
+        for zoom in [0.35_f32, 0.6, 1.0, 1.8, 3.0] {
+            let view = View { zoom, ..Default::default() };
+            for kind in [
+                NodeKind::Repeat,
+                NodeKind::Branch,
+                NodeKind::LessThan,
+                NodeKind::LitInt(7),
+                NodeKind::LitFloat(0.5),
+                NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int },
+                NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int },
+            ] {
+                let node = node_rect(&view, rect, (0.0, 0.0), &kind);
+                let icon = info_rect(&view, rect, (0.0, 0.0), &kind);
+                let header = Rect::from_min_size(
+                    node.min,
+                    vec2(node.width(), HEADER_H * zoom),
+                );
+                assert!(
+                    header.contains_rect(icon),
+                    "at zoom {zoom} the icon on {kind:?} escapes its header: {icon:?} vs {header:?}"
+                );
+            }
+        }
+    }
+
+    /// It must not sit on top of the title either, or it covers the one thing you need
+    /// to tell nodes apart.
+    #[test]
+    fn the_icon_keeps_clear_of_the_title() {
+        let rect = canvas_rect();
+        let view = View::default();
+        let kind = NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int };
+        let node = node_rect(&view, rect, (0.0, 0.0), &kind);
+        let icon = info_rect(&view, rect, (0.0, 0.0), &kind);
+        assert!(
+            icon.min.x > node.center().x,
+            "the icon belongs on the right half, away from the title"
+        );
+    }
+
+    /// The set of nodes that get an icon is a deliberate choice, not an accident: one on
+    /// every node is one nobody reads. This pins the choice so it changes on purpose.
+    #[test]
+    fn only_the_nodes_with_a_sharp_edge_carry_one() {
+        for kind in [
+            NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int },
+            NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int },
+            NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float },
+            NodeKind::Repeat,
+            NodeKind::Branch,
+            NodeKind::LessThan,
+            NodeKind::LitInt(0),
+            NodeKind::LitFloat(0.0),
+        ] {
+            assert!(kind.caution().is_some(), "{kind:?} should carry a caution");
+        }
+        for kind in [
+            NodeKind::EventStart,
+            NodeKind::Print { ty: DataType::Str },
+            NodeKind::LitBool(true),
+            NodeKind::LitStr("hi".into()),
+            NodeKind::GetVar { name: "x".into(), ty: DataType::Int },
+            NodeKind::SetVar { name: "x".into(), ty: DataType::Int },
+        ] {
+            assert!(kind.caution().is_none(), "{kind:?} should not carry one");
+        }
+    }
+
+    /// Divide has its own note, because throwing the remainder away surprises people
+    /// far more often than the ceiling does.
+    #[test]
+    fn dividing_whole_numbers_gets_its_own_note() {
+        let divide = NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int }.caution().unwrap();
+        let add = NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int }.caution().unwrap();
+        assert!(divide.contains("remainder"), "{divide}");
+        assert!(add.contains("wraps"), "{add}");
+        assert_ne!(divide, add);
     }
 }

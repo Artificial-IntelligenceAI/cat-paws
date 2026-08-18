@@ -142,3 +142,32 @@ Catching that means checking every addition while the program runs — in WebAss
 and the benchmark says Cat Paws currently keeps pace with native Rust precisely because it
 does none of it. That is a real trade and it has not been made yet; a test pins the current
 behaviour so the gap is a recorded fact rather than a surprise.
+
+## Cautions — the `ⓘ` on a node
+
+Separate from errors, and deliberately so. An error means *this program will not compile*.
+A caution means *this node behaves in a way that catches people out*, and the program is
+perfectly fine.
+
+They live on `NodeKind::caution` in the core rather than in the editor, because they are
+facts about the language and a second copy in the drawing code would drift away from the
+first.
+
+Only nodes with a genuine sharp edge carry one:
+
+| Node | What it warns about |
+|---|---|
+| whole-number `+ − ×` | the ceiling, and that going past it wraps around silently |
+| whole-number `÷` | the remainder is thrown away, and dividing by zero stops the program |
+| decimal arithmetic | decimals are approximate; 0.1 + 0.2 is not exactly 0.3 |
+| `Repeat` | the count is read once, before the first pass |
+| `Branch` | nothing can follow it — each arm ends where it ends |
+| `Less than` | whole numbers only, and strictly less than |
+| an integer literal | the range it can hold |
+| a decimal literal | some values change the moment they are typed |
+
+`Event start`, `Print`, `Set`, a variable, a boolean and a string carry none. **An icon on
+every node is an icon nobody reads**, so the mark has to mean something when it appears.
+
+The icon sits at the right of the header and stays dim until the pointer is near it. A
+permanent bright mark on half the canvas reads as a fault, and none of these are faults.
