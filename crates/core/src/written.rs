@@ -392,7 +392,25 @@ fn parse_value(line: usize, ty: DataType, raw: &str) -> Result<Value, Problem> {
         )
     };
     Ok(match ty {
-        DataType::Int => Value::Int(raw.parse().map_err(|_| bad("a whole number"))?),
+        DataType::Int => match raw.parse::<i64>() {
+            Ok(v) => Value::Int(v),
+            // Too big is a different mistake from not-a-number, and saying "'99999999999999999999'
+            // is not a whole number" to someone who has just typed a whole number teaches
+            // them to distrust the message rather than the number.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow
+                ) =>
+            {
+                return Err(Problem::new(
+                    line,
+                    format!("{raw} is too big to be an integer"),
+                    "an integer goes from -9223372036854775808 to 9223372036854775807 — use a float for numbers larger than that",
+                ))
+            }
+            Err(_) => return Err(bad("a whole number")),
+        },
         DataType::Float => Value::Float(raw.parse().map_err(|_| bad("a decimal"))?),
         DataType::Bool => match raw {
             "true" => Value::Bool(true),

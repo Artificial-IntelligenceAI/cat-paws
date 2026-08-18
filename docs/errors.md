@@ -89,3 +89,56 @@ Named after what is on screen, not after compiler phases.
 
 Read together they are close to a summary of what Cat Paws expects, which is the test of
 whether they are pulling their weight.
+
+## `CP-MATH-01` and `CP-MATH-02` — arithmetic with no answer
+
+A fourth area, added because these are neither a wiring mistake nor a naming one: the
+wires are right and the sum has no answer.
+
+**`CP-MATH-01`** — a result outside what an integer holds.
+
+```
+print integer '9223372036854775807' + integer '1'
+
+    9223372036854775807 + 1 is bigger than an integer can hold
+    try: an integer goes up to 9223372036854775807 — use smaller numbers, or
+         floats, which reach much further
+```
+
+The machine does not do this on its own. `i64.add` **wraps**: it turns that sum into
+−9223372036854775808 and reports nothing, which is what C, Java, Go and Rust-in-release all
+do. That is a defensible default for someone who knows to expect it, and a trap for someone
+who does not. A beginner has no reason to suspect the machine rather than themselves, so a
+wrong answer they believe is worse than an error they can read.
+
+**`CP-MATH-02`** — dividing by zero.
+
+```
+print integer '5' / integer '0'
+
+    this divides by zero, which has no answer
+    try: change the second number to anything other than zero
+```
+
+Previously this compiled, ran, and trapped part-way through — after everything before it had
+already printed, so the output stopped mid-way with no explanation.
+
+### What this reaches, and what it does not
+
+Every sum whose two sides are **already known while compiling** is worked out then, and
+refused there if it has no answer. That covers literals, and nested sums built only from
+literals, all the way down.
+
+It does **not** reach a value that arrives through a variable:
+
+```
+declare 'x' = integer '9223372036854775807'
+set 'x' = 'x' + integer '1'
+print 'x'                            → -9223372036854775808, silently
+```
+
+Catching that means checking every addition while the program runs — in WebAssembly, an
+`i64.add` followed by a comparison and a branch, on every operation. Cheap individually,
+and the benchmark says Cat Paws currently keeps pace with native Rust precisely because it
+does none of it. That is a real trade and it has not been made yet; a test pins the current
+behaviour so the gap is a recorded fact rather than a surprise.

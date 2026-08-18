@@ -541,13 +541,30 @@ pub(crate) mod arith_tests {
     }
 
     #[test]
-    fn dividing_a_whole_number_by_zero_stops_the_program() {
-        // `i64.div_s` traps rather than producing a number, so the interpreter must
-        // refuse too — otherwise the two paths disagree on the one case that matters.
+    fn dividing_a_whole_number_by_zero_is_refused_while_compiling() {
+        // This used to compile and then trap part-way through running, after anything
+        // before it had already printed. Both sides are known here, so the answer can be
+        // asked for — and refused — before the program ever starts.
         let g = maths(ArithOp::Divide, DataType::Int, Value::Int(1), Value::Int(0));
-        let program = compile(&g).expect("should compile");
-        let result = vm::run(&program);
-        let message = result.error.expect("dividing by zero should stop it");
+        let diags = compile(&g).expect_err("dividing by zero should be refused");
+        assert_eq!(diags[0].code, compile::DIVIDE_BY_ZERO);
+        assert!(diags[0].message.contains("zero"), "unhelpful: {}", diags[0].message);
+        wasm::emit(&g).expect_err("the compiled path should refuse it too");
+    }
+
+    #[test]
+    fn dividing_by_a_zero_that_only_appears_at_run_time_still_stops_the_program() {
+        // The compile-time check only reaches sums whose operands are already known. A
+        // divisor that arrives through a variable is not, so `i64.div_s` trapping — and
+        // the interpreter refusing to match it — is still what protects this case.
+        let mut g = Graph::new();
+        written::generate(
+            &mut g,
+            "declare 'd' = integer '0'\nprint integer '1' / 'd'",
+        )
+        .expect("should read");
+        let program = compile(&g).expect("should compile — the zero is not known yet");
+        let message = vm::run(&program).error.expect("dividing by zero should stop it");
         assert!(message.contains("zero"), "unhelpful message: {message}");
     }
 
@@ -1012,5 +1029,108 @@ mod precedence_tests {
             ran("print integer '1000000007' - integer '1000000007' / integer '1000003' * integer '1000003'"),
             ["997010"]
         );
+    }
+}
+
+/// Overflow is refused while compiling, not wrapped around while running.
+///
+/// The machine wraps: `i64.add` turns 9223372036854775807 + 1 into a large negative
+/// number and reports nothing. Someone learning to program has no reason to suspect the
+/// machine rather than themselves, so a wrong answer they believe is worse than an error
+/// they can read. Every sum whose operands are already known is therefore worked out
+/// while compiling, and refused there if it has no answer.
+#[cfg(test)]
+mod overflow_tests {
+    use super::wasm_tests::run_wasm;
+    use super::*;
+
+    fn refused(text: &str) -> Vec<compile::Diagnostic> {
+        let mut g = Graph::new();
+        written::generate(&mut g, text).unwrap_or_else(|p| panic!("should read: {p:#?}"));
+        wasm::emit(&g).expect_err("this should not compile")
+    }
+
+    fn ran(text: &str) -> Vec<String> {
+        let mut g = Graph::new();
+        written::generate(&mut g, text).unwrap_or_else(|p| panic!("should read: {p:#?}"));
+        run_wasm(&wasm::emit(&g).unwrap_or_else(|d| panic!("should compile: {d:#?}")))
+    }
+
+    #[test]
+    fn adding_past_the_top_is_refused() {
+        let d = refused("print integer '9223372036854775807' + integer '1'");
+        assert_eq!(d[0].code, compile::TOO_BIG);
+        assert!(d[0].message.contains("bigger than an integer can hold"), "{:?}", d[0].message);
+    }
+
+    #[test]
+    fn subtracting_past_the_bottom_is_refused() {
+        let d = refused("print integer '-9223372036854775808' - integer '1'");
+        assert_eq!(d[0].code, compile::TOO_BIG);
+    }
+
+    #[test]
+    fn multiplying_past_the_top_is_refused() {
+        let d = refused("print integer '4000000000' * integer '4000000000'");
+        assert_eq!(d[0].code, compile::TOO_BIG);
+    }
+
+    #[test]
+    fn dividing_by_zero_is_refused_before_it_runs() {
+        // Previously this compiled and the program trapped part-way through, after
+        // whatever came before it had already printed.
+        let d = refused("print integer '5' / integer '0'");
+        assert_eq!(d[0].code, compile::DIVIDE_BY_ZERO);
+        assert!(d[0].message.contains("no answer"), "{:?}", d[0].message);
+    }
+
+    #[test]
+    fn a_literal_too_big_to_be_an_integer_says_so() {
+        let mut g = Graph::new();
+        let p = written::generate(&mut g, "print integer '99999999999999999999'")
+            .expect_err("should be refused");
+        assert!(p[0].message.contains("too big to be an integer"), "{:?}", p[0].message);
+    }
+
+    #[test]
+    fn sums_that_do_fit_are_untouched() {
+        assert_eq!(ran("print integer '9223372036854775806' + integer '1'"), ["9223372036854775807"]);
+        assert_eq!(ran("print integer '-9223372036854775807' - integer '1'"), ["-9223372036854775808"]);
+    }
+
+    #[test]
+    fn nested_sums_are_checked_all_the_way_down() {
+        // The inner multiply overflows; folding upward has to notice rather than
+        // carrying a wrapped value into the outer sum.
+        let d = refused("print integer '4000000000' * integer '4000000000' + integer '1'");
+        assert_eq!(d[0].code, compile::TOO_BIG);
+    }
+
+    #[test]
+    fn the_two_backends_still_agree_on_sums_that_fit() {
+        for text in [
+            "print integer '9223372036854775806' + integer '1'",
+            "print integer '-9223372036854775807' - integer '1'",
+            "print integer '7' / integer '2'",
+            "print integer '-7' / integer '2'",
+        ] {
+            let mut g = Graph::new();
+            written::generate(&mut g, text).unwrap();
+            let interpreted = vm::run(&compile(&g).expect("bytecode")).output;
+            let compiled = run_wasm(&wasm::emit(&g).expect("wasm"));
+            assert_eq!(interpreted, compiled, "disagreement on:\n{text}");
+        }
+    }
+
+    /// Overflow that only shows up at run time is still silent — worth pinning so the
+    /// gap is a recorded fact rather than a surprise.
+    #[test]
+    fn overflow_through_a_variable_is_not_caught_yet() {
+        let out = ran(
+            "declare 'x' = integer '9223372036854775807'\n\
+             set 'x' = 'x' + integer '1'\n\
+             print 'x'",
+        );
+        assert_eq!(out, ["-9223372036854775808"], "still wraps once a variable is involved");
     }
 }

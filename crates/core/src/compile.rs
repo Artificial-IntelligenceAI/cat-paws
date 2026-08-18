@@ -21,6 +21,8 @@ pub enum Area {
     Wire,
     /// Variables.
     Name,
+    /// Arithmetic — a sum whose answer cannot be given.
+    Math,
 }
 
 impl Area {
@@ -29,6 +31,7 @@ impl Area {
             Area::Flow => "FLOW",
             Area::Wire => "WIRE",
             Area::Name => "NAME",
+            Area::Math => "MATH",
         }
     }
 }
@@ -72,6 +75,10 @@ pub const DATA_LOOP: Code = Code::new(Area::Wire, 2);
 pub const NOT_A_VALUE: Code = Code::new(Area::Wire, 3);
 /// A node refers to a variable that does not exist.
 pub const NO_SUCH_VAR: Code = Code::new(Area::Name, 1);
+/// A sum whose answer is outside what an integer holds.
+pub const TOO_BIG: Code = Code::new(Area::Math, 1);
+/// Dividing by zero.
+pub const DIVIDE_BY_ZERO: Code = Code::new(Area::Math, 2);
 
 impl Code {
     /// The rule this code enforces, stated once so a reader learns the language rather
@@ -91,6 +98,8 @@ impl Code {
             (Area::Wire, 2) => "a value is worked out from the wires feeding it, so it cannot be worked out from itself.",
             (Area::Wire, 3) => "only a node with a coloured output produces a value that something else can read.",
             (Area::Name, 1) => "a variable is created in the Variables panel before a node can read or write it.",
+            (Area::Math, 1) => "an integer holds whole numbers from -9223372036854775808 to 9223372036854775807. An answer outside that is an error, never a number that has quietly wrapped around.",
+            (Area::Math, 2) => "dividing by zero has no answer, so Cat Paws refuses rather than inventing one.",
             _ => "",
         }
     }
@@ -452,6 +461,54 @@ impl<'a> Values<'a> {
         self.output_expr(source, expected)
     }
 
+    /// Build an arithmetic value, working the answer out now when both sides are
+    /// already known.
+    ///
+    /// Doing the sum at compile time is not an optimisation. It is the only moment at
+    /// which an overflow can be *said out loud*: `i64.add` wraps silently, so once the
+    /// program is running, 9223372036854775807 + 1 is a large negative number and
+    /// nothing anywhere knows that is wrong. Someone learning to program has no reason
+    /// to suspect the machine rather than themselves, so the answer has to be refused
+    /// before it is ever shown.
+    fn arith(&mut self, id: NodeId, op: ArithOp, ty: DataType, a: Expr, b: Expr) -> Expr {
+        let (Expr::Lit(Value::Int(x)), Expr::Lit(Value::Int(y))) = (&a, &b) else {
+            return Expr::Arith(op, ty, Box::new(a), Box::new(b));
+        };
+        if ty != DataType::Int {
+            return Expr::Arith(op, ty, Box::new(a), Box::new(b));
+        }
+        let (x, y) = (*x, *y);
+
+        if op == ArithOp::Divide && y == 0 {
+            self.diags.push(Diagnostic::at(
+                DIVIDE_BY_ZERO,
+                id,
+                "this divides by zero, which has no answer",
+                "change the second number to anything other than zero",
+            ));
+            return Expr::Lit(Value::Int(0));
+        }
+
+        let answer = match op {
+            ArithOp::Add => x.checked_add(y),
+            ArithOp::Subtract => x.checked_sub(y),
+            ArithOp::Multiply => x.checked_mul(y),
+            ArithOp::Divide => x.checked_div(y),
+        };
+        match answer {
+            Some(v) => Expr::Lit(Value::Int(v)),
+            None => {
+                self.diags.push(Diagnostic::at(
+                    TOO_BIG,
+                    id,
+                    format!("{x} {} {y} is bigger than an integer can hold", op.symbol()),
+                    "an integer goes up to 9223372036854775807 — use smaller numbers, or floats, which reach much further",
+                ));
+                Expr::Lit(Value::Int(0))
+            }
+        }
+    }
+
     /// Compiles the value produced by an output pin.
     fn output_expr(&mut self, source: PinRef, expected: DataType) -> Expr {
         let id = source.node;
@@ -494,7 +551,7 @@ impl<'a> Values<'a> {
             NodeKind::Arith { op, ty } => {
                 let a = self.input_expr(id, 0, ty);
                 let b = self.input_expr(id, 1, ty);
-                Expr::Arith(op, ty, Box::new(a), Box::new(b))
+                self.arith(id, op, ty, a, b)
             }
             other => {
                 self.diags.push(Diagnostic::at(
