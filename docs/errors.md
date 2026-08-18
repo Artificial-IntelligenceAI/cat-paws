@@ -236,3 +236,29 @@ side of 2^53 and both ends of the range.
 
 A disagreement between the oracle and the thing it checks is worse than an ordinary bug: it
 makes every other test weaker, because agreement stops meaning what it is supposed to mean.
+
+## A paused tab says so
+
+Not a compiler message, but the same principle, and it cost a full afternoon of
+misdiagnosis before it was written down.
+
+The editor draws from `requestAnimationFrame`, and a browser gives none to a page that is
+not in front. So a backgrounded tab paints **nothing** — not a stale frame, not a partial
+one. The canvas stays cleared.
+
+`index.html` paints the body the same colour as the canvas on purpose, so there is no white
+flash while the WebAssembly loads. The consequence is that a paused tab and a working one
+are *pixel-identical*: a flat rectangle either way, with no way to tell whether the program
+is fine, still loading, or broken.
+
+It now says which:
+
+```
+Cat Paws is paused
+A browser stops drawing a tab that is not in front,
+so the canvas is blank rather than broken.
+Bring this tab to the front and it carries on.
+```
+
+Plain page text rather than anything drawn on the canvas — so it appears precisely when the
+canvas cannot, including in a screenshot.

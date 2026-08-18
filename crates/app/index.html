@@ -35,14 +35,27 @@
             height: 100%;
         }
 
-        .loading {
+        .loading,
+        .paused {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
             font-family: ui-monospace, monospace;
             font-size: 14px;
+            line-height: 1.7;
+            text-align: center;
             color: #586e75;
+        }
+
+        /* Shown only while the browser has this page in the background. */
+        .paused {
+            display: none;
+        }
+
+        .paused b {
+            color: #93a1a1;
+            font-weight: 600;
         }
     </style>
 </head>
@@ -50,6 +63,12 @@
 <body>
     <canvas id="the_canvas_id"></canvas>
     <div class="loading" id="loading">loading Cat Paws&hellip;</div>
+    <div class="paused" id="paused">
+        <b>Cat Paws is paused</b><br />
+        A browser stops drawing a tab that is not in front,<br />
+        so the canvas is blank rather than broken.<br />
+        Bring this tab to the front and it carries on.
+    </div>
     <script>
         // The right mouse button pans the canvas, so the browser's own context
         // menu must not appear on right-press.
@@ -59,6 +78,26 @@
                 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
             }
         });
+
+        // Say so when the browser has stopped drawing.
+        //
+        // The canvas only paints while this page is genuinely in front, because eframe
+        // draws from requestAnimationFrame and a hidden page is given none. The body is
+        // painted the same colour as the canvas on purpose — it stops a white flash while
+        // the WASM loads — which means a paused tab and a working one look identical, and
+        // the only honest thing to do is say which it is.
+        (() => {
+            const paused = () => {
+                const el = document.getElementById("paused");
+                if (!el) return;
+                el.style.display = document.hidden ? "block" : "none";
+                const loading = document.getElementById("loading");
+                if (document.hidden && loading) loading.remove();
+            };
+            document.addEventListener("visibilitychange", paused);
+            document.addEventListener("DOMContentLoaded", paused);
+            paused();
+        })();
 
         // Remove the loading text once the canvas has been painted at least once.
         document.addEventListener("DOMContentLoaded", () => {
