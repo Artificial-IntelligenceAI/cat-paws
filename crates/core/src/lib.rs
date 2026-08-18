@@ -1300,3 +1300,64 @@ mod comparing_large_numbers {
         }
     }
 }
+
+/// A quoted word that names no variable should say what it looks like you meant.
+///
+/// Quotes alone mean *the thing called this*, and a value announces its type first. The
+/// rule earns its keep — it is the only thing separating `print 'health'` from
+/// `print string 'health'` — but it turns a beginner's `= '10000'` into "there is no
+/// variable called '10000'", which is true and useless.
+#[cfg(test)]
+mod naming_something_that_is_not_there {
+    use super::*;
+
+    fn refused(text: &str) -> Vec<written::Problem> {
+        let mut g = Graph::new();
+        written::generate(&mut g, text).expect_err("should be refused")
+    }
+
+    #[test]
+    fn a_number_in_quotes_is_told_how_to_be_a_number() {
+        let p = refused("declare 'x' = '10000'");
+        assert!(
+            p[0].message.contains("read as the name of a variable"),
+            "unhelpful: {}", p[0].message
+        );
+        assert!(p[0].fix.contains("integer '10000'"), "no spelling offered: {}", p[0].fix);
+    }
+
+    #[test]
+    fn a_decimal_and_a_boolean_are_told_too() {
+        assert!(refused("declare 'x' = '1.5'")[0].fix.contains("float '1.5'"));
+        assert!(refused("declare 'x' = 'true'")[0].fix.contains("boolean 'true'"));
+        assert!(refused("declare 'x' = '-42'")[0].fix.contains("integer '-42'"));
+    }
+
+    /// A word that is not a value is probably a typo or a missing declaration — but it
+    /// might be text, so that spelling is offered as well.
+    #[test]
+    fn a_word_keeps_the_old_advice_and_gains_one() {
+        let p = refused("declare 'x' = 'helth'");
+        assert!(p[0].message.contains("there is no variable called 'helth'"));
+        assert!(p[0].fix.contains("spelling"));
+        assert!(p[0].fix.contains("string 'helth'"), "text was not offered: {}", p[0].fix);
+    }
+
+    /// A variable that really does exist still just works.
+    #[test]
+    fn naming_a_real_variable_is_untouched() {
+        let mut g = Graph::new();
+        written::generate(&mut g, "declare 'a' = integer '3'\ndeclare 'b' = 'a'")
+            .expect("naming an existing variable should work");
+        assert!(g.vars.contains_key("b"));
+    }
+
+    /// Reading a number is the point, so it must still reach the program.
+    #[test]
+    fn the_suggested_spelling_actually_works() {
+        let mut g = Graph::new();
+        written::generate(&mut g, "declare 'x' = integer '10000'\nprint 'x'").expect("should read");
+        let out = super::wasm_tests::run_wasm(&wasm::emit(&g).expect("wasm"));
+        assert_eq!(out, vec!["10000"]);
+    }
+}

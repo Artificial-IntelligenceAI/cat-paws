@@ -60,6 +60,18 @@ print string 'health'       the six letters
 
 Without the rule those two lines are the same text meaning different things.
 
+The rule has one sharp edge, so the error covers it. `declare 'x' = '10000'` reads `'10000'`
+as *the variable called 10000* and finds none — which is correct, and useless on its own:
+
+```
+line 1: '10000' is read as the name of a variable here, not as a value
+     try: a value says its type first — write integer '10000'
+```
+
+A quoted word that names nothing and looks like a value now says which spelling it wanted:
+`integer`, `float` or `boolean` as appropriate. A word that looks like a word keeps the old
+advice about spelling, and gains `string 'that'` in case text was what was meant.
+
 ## The types are the ones on the canvas
 
 | Written | Pin |

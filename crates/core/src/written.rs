@@ -431,6 +431,42 @@ fn a_an(label: &str) -> String {
     format!("{article} {label}")
 }
 
+
+/// What to say when a quoted word names no variable.
+///
+/// Quotes alone mean *the thing called this*; a value announces its type first. That rule
+/// is what keeps `print 'health'` and `print string 'health'` different, and it is worth
+/// keeping — but it makes `= '10000'` fail with "there is no variable called '10000'",
+/// which teaches nobody anything. When the word is plainly a value, say which spelling it
+/// wanted instead.
+fn no_such_name(line: usize, name: &str) -> Problem {
+    let looks_like = if name.parse::<i64>().is_ok() {
+        Some(format!("integer '{name}'"))
+    } else if name.parse::<f64>().is_ok() {
+        Some(format!("float '{name}'"))
+    } else if name == "true" || name == "false" {
+        Some(format!("boolean '{name}'"))
+    } else {
+        None
+    };
+
+    match looks_like {
+        Some(spelled) => Problem::new(
+            line,
+            format!("'{name}' is read as the name of a variable here, not as a value"),
+            format!("a value says its type first — write {spelled}"),
+        ),
+        None => Problem::new(
+            line,
+            format!("there is no variable called '{name}'"),
+            format!(
+                "declare it first, check the spelling, or write string '{name}' if you meant \
+                 those letters as text"
+            ),
+        ),
+    }
+}
+
 // ── building ────────────────────────────────────────────────────────────────
 
 /// Where to start laying out, so generated nodes do not land on existing ones.
@@ -603,11 +639,7 @@ impl<'a> Builder<'a> {
             }
             Expr::Var(name) => {
                 let Some(decl) = self.graph.vars.get(name) else {
-                    self.problems.push(Problem::new(
-                        line,
-                        format!("there is no variable called '{name}'"),
-                        "declare it first, or check the spelling",
-                    ));
+                    self.problems.push(no_such_name(line, name));
                     return None;
                 };
                 let ty = decl.ty;
@@ -638,11 +670,7 @@ impl<'a> Builder<'a> {
             Expr::Var(name) => match self.graph.vars.get(name) {
                 Some(decl) => Some(decl.ty),
                 None => {
-                    self.problems.push(Problem::new(
-                        line,
-                        format!("there is no variable called '{name}'"),
-                        "declare it first, or check the spelling",
-                    ));
+                    self.problems.push(no_such_name(line, name));
                     None
                 }
             },
