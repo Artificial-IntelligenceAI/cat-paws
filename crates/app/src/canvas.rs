@@ -1036,32 +1036,43 @@ mod caution_icon {
         );
     }
 
-    /// The set of nodes that get an icon is a deliberate choice, not an accident: one on
-    /// every node is one nobody reads. This pins the choice so it changes on purpose.
+    /// Every node a person can place says something.
+    ///
+    /// This started the other way round — six kinds carried nothing, on the reasoning
+    /// that an icon on every node is an icon nobody reads. That reasoning was fine and
+    /// the application of it was not: `Set` writing once rather than staying true is the
+    /// single most common thing a beginner gets wrong about programming, and it had no
+    /// mark at all. When every node genuinely has a sharp edge, every node gets one.
     #[test]
-    fn only_the_nodes_with_a_sharp_edge_carry_one() {
+    fn every_node_a_person_can_place_says_something() {
         for kind in [
+            NodeKind::EventStart,
+            NodeKind::Branch,
+            NodeKind::Repeat,
+            NodeKind::Print { ty: DataType::Str },
+            NodeKind::Print { ty: DataType::Int },
+            NodeKind::LessThan,
             NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int },
             NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int },
             NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float },
-            NodeKind::Repeat,
-            NodeKind::Branch,
-            NodeKind::LessThan,
-            NodeKind::LitInt(0),
-            NodeKind::LitFloat(0.0),
-        ] {
-            assert!(kind.caution().is_some(), "{kind:?} should carry a caution");
-        }
-        for kind in [
-            NodeKind::EventStart,
-            NodeKind::Print { ty: DataType::Str },
-            NodeKind::LitBool(true),
-            NodeKind::LitStr("hi".into()),
             NodeKind::GetVar { name: "x".into(), ty: DataType::Int },
             NodeKind::SetVar { name: "x".into(), ty: DataType::Int },
+            NodeKind::LitInt(0),
+            NodeKind::LitFloat(0.0),
+            NodeKind::LitBool(true),
+            NodeKind::LitStr("hi".into()),
         ] {
-            assert!(kind.caution().is_none(), "{kind:?} should not carry one");
+            assert!(kind.caution().is_some(), "{kind:?} has nothing to say");
         }
+    }
+
+    /// The one a beginner needs most: a variable does not keep itself up to date.
+    #[test]
+    fn set_explains_that_it_does_not_keep_holding() {
+        let text = NodeKind::SetVar { name: "total".into(), ty: DataType::Int }
+            .caution()
+            .expect("Set should carry a caution");
+        assert!(text.contains("not a rule that keeps holding"), "{text}");
     }
 
     /// Divide has its own note, because throwing the remainder away surprises people

@@ -153,26 +153,32 @@ They live on `NodeKind::caution` in the core rather than in the editor, because 
 facts about the language and a second copy in the drawing code would drift away from the
 first.
 
-Only nodes with a genuine sharp edge carry one:
-
-Each one is in two halves: what the node does, then **what that means for you**. The first
-half alone is not much use — "whole numbers wrap around" tells a beginner what happens,
-not that their counter will silently go negative and every number after it will be wrong.
-A test enforces that both halves are present, and that they come in that order.
+Every node a person can place carries one:
 
 | Node | What it warns about |
 |---|---|
-| whole-number `+ − ×` | the ceiling, and that going past it makes the answer wrong with no warning |
-| whole-number `÷` | the remainder is thrown away, and dividing by zero stops the program |
-| decimal arithmetic | decimals are approximate, and stop counting whole numbers exactly above 2⁵³ |
+| `Event start` | anything not joined to this chain never runs, silently |
+| whole-number `+ − ×` | going past the ceiling makes the answer wrong with no warning |
+| whole-number `÷` | the remainder is thrown away; dividing by zero stops the program |
+| decimal arithmetic | approximate, and stops counting whole numbers exactly above 2⁵³ |
 | `Repeat` | the count is read once, before the first pass |
 | `Branch` | nothing can follow it — each arm ends where it ends |
 | `Less than` | whole numbers only, and strictly less than |
-| an integer literal | the range it can hold |
-| a decimal literal | some values change the moment they are typed |
+| `Print` | writes to the output panel, not onto the canvas |
+| `Set` | writes **once**; it is not a rule that keeps holding |
+| a variable | reads at the moment execution passes, so it can differ each time round |
+| a number | the range, and that arriving past it makes the answer wrong |
+| a decimal | some values change the moment they are typed |
+| a boolean | true or false, not 1 and 0 |
+| text | `"5"` is the character five, not the number 5 |
 
-`Event start`, `Print`, `Set`, a variable, a boolean and a string carry none. **An icon on
-every node is an icon nobody reads**, so the mark has to mean something when it appears.
+This began the other way round, with six kinds carrying nothing on the reasoning that **an
+icon on every node is an icon nobody reads**. The reasoning was sound and the application
+of it was not. `Set` writing once rather than staying true — *"I set total from score, why
+didn't total change when score did?"* — is the single most common thing a beginner gets
+wrong about programming anywhere, and it had no mark at all. When every node genuinely has
+a sharp edge, every node earns one; the icon is a "what should I know here", not a hazard
+sign.
 
 The icon sits at the right of the header and stays dim until the pointer is near it. A
 permanent bright mark on half the canvas reads as a fault, and none of these are faults.

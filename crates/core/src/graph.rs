@@ -226,6 +226,9 @@ impl NodeKind {
                  can stop growing without ever saying so.\n\n\
                  This is how decimals work on every computer, not something Cat Paws does.",
             ),
+            // Arithmetic on a boolean or a string is not something the editor can build,
+            // since the pins are typed — but the enum allows it, so the match must.
+            NodeKind::Arith { .. } => None,
             NodeKind::Repeat => Some(
                 "The count is read once, before the first pass.\n\n\
                  What that means: changing it from inside the loop does nothing at all. The \
@@ -261,7 +264,40 @@ impl NodeKind {
                  from what you typed, and two decimals that look identical on screen are \
                  not always equal.",
             ),
-            _ => None,
+            NodeKind::SetVar { .. } => Some(
+                "Writes the value once, at the moment execution reaches this node.\n\n\
+                 What that means: it is not a rule that keeps holding. Set 'total' from \
+                 'score' and then change 'score', and 'total' keeps the old number — it \
+                 only changes if execution comes back through here again.",
+            ),
+            NodeKind::GetVar { .. } => Some(
+                "Reads whatever the variable holds at the moment execution passes through.\n\n\
+                 What that means: the same node can give a different answer each time round \
+                 a loop. It is not fixed when you place it.",
+            ),
+            NodeKind::EventStart => Some(
+                "Running starts here, and only ever follows the grey wires out of it.\n\n\
+                 What that means: a node not joined to this chain never runs, however \
+                 carefully it is set up. The program still compiles and says nothing — it \
+                 just quietly does less than you built.",
+            ),
+            NodeKind::Print { .. } => Some(
+                "Writes a line to the output panel, not onto the canvas.\n\n\
+                 What that means: nothing appears beside your nodes — look underneath. And \
+                 each Print takes one type, which is why a Print for text refuses a number: \
+                 pick the Print that matches what you are showing.",
+            ),
+            NodeKind::LitStr(_) => Some(
+                "Text, even when it looks like a number. \"5\" here is the character five, \
+                 not the number 5.\n\n\
+                 What that means: it cannot be added, compared with Less than, or wired \
+                 into anything expecting a number. Use a Number node for that.",
+            ),
+            NodeKind::LitBool(_) => Some(
+                "True or false, and nothing else — not 1 and 0.\n\n\
+                 What that means: it cannot be added or compared with Less than. It belongs \
+                 in a Branch, or any pin asking for a boolean.",
+            ),
         }
     }
 
