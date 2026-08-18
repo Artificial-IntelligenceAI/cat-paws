@@ -162,9 +162,9 @@ A test enforces that both halves are present, and that they come in that order.
 
 | Node | What it warns about |
 |---|---|
-| whole-number `+ − ×` | the ceiling, and that going past it wraps around silently |
+| whole-number `+ − ×` | the ceiling, and that going past it makes the answer wrong with no warning |
 | whole-number `÷` | the remainder is thrown away, and dividing by zero stops the program |
-| decimal arithmetic | decimals are approximate; 0.1 + 0.2 is not exactly 0.3 |
+| decimal arithmetic | decimals are approximate, and stop counting whole numbers exactly above 2⁵³ |
 | `Repeat` | the count is read once, before the first pass |
 | `Branch` | nothing can follow it — each arm ends where it ends |
 | `Less than` | whole numbers only, and strictly less than |
@@ -176,3 +176,23 @@ every node is an icon nobody reads**, so the mark has to mean something when it 
 
 The icon sits at the right of the header and stays dim until the pointer is near it. A
 permanent bright mark on half the canvas reads as a fault, and none of these are faults.
+
+### Floats are not the way round the integer ceiling
+
+Worth stating on its own, because this project got it wrong first time and the mistake is
+an easy one to make:
+
+```
+floats stop counting whole numbers exactly above   9,007,199,254,740,992   (2^53)
+an integer runs out at                             9,223,372,036,854,775,807
+```
+
+A float reaches numbers a thousand times larger — but it stops being **exact** a thousand
+times *sooner*. Add 1 to 9,007,199,254,740,992 as a float and you get the same number back,
+silently. So "use a float instead" sends someone who has hit the integer ceiling somewhere
+strictly worse: integers at least announce nothing and wrap to an obviously wrong negative,
+while a float quietly stops moving.
+
+`CP-MATH-01` used to end with *"or floats, which reach much further"*. It no longer does,
+and a test now checks that anywhere the integer ceiling is named, the float one is named
+beside it.

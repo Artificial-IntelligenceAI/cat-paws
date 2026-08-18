@@ -218,10 +218,12 @@ impl NodeKind {
                  variable.",
             ),
             NodeKind::Arith { ty: DataType::Float, .. } => Some(
-                "Decimals are approximate. 0.1 + 0.2 does not come out as exactly 0.3.\n\n\
-                 What that means: checking whether two decimals are exactly equal can come \
-                 out false even when the maths says they match, and adding many small \
-                 decimals together drifts further from the true answer the more you add.\n\n\
+                "Decimals are approximate. 0.1 + 0.2 does not come out as exactly 0.3, and \
+                 whole numbers above 9,007,199,254,740,992 stop being counted exactly — \
+                 add 1 to that and you get the same number back.\n\n\
+                 What that means: two decimals that should match can compare as different, \
+                 many small ones added together drift from the true answer, and a big one \
+                 can stop growing without ever saying so.\n\n\
                  This is how decimals work on every computer, not something Cat Paws does.",
             ),
             NodeKind::Repeat => Some(
@@ -245,9 +247,12 @@ impl NodeKind {
             NodeKind::LitInt(_) => Some(
                 "A whole number here goes from -9,223,372,036,854,775,808 up to \
                  9,223,372,036,854,775,807.\n\n\
-                 What that means: typing something bigger is refused straight away — but \
-                 *reaching* something bigger by adding is not, and that wraps around to a \
-                 negative number instead.",
+                 What that means: typing something bigger is refused straight away. But \
+                 *arriving* somewhere bigger, by adding or multiplying, is not refused — \
+                 the number silently becomes wrong, wrapping round to a large negative, \
+                 and nothing anywhere tells you.\n\n\
+                 Floats are not a way round this: they reach further, but stop counting \
+                 whole numbers exactly above 9,007,199,254,740,992.",
             ),
             NodeKind::LitFloat(_) => Some(
                 "Some decimals change the moment they are typed, because a computer stores \

@@ -502,7 +502,7 @@ impl<'a> Values<'a> {
                     TOO_BIG,
                     id,
                     format!("{x} {} {y} is bigger than an integer can hold", op.symbol()),
-                    "an integer goes up to 9223372036854775807 — use smaller numbers, or floats, which reach much further",
+                    "an integer goes up to 9223372036854775807 — use smaller numbers. Floats reach further but stop being exact above 9007199254740992, so they are not a way round this",
                 ));
                 Expr::Lit(Value::Int(0))
             }

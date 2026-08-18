@@ -1137,3 +1137,39 @@ mod caution_wording {
         }
     }
 }
+
+#[cfg(test)]
+mod float_is_not_an_escape {
+    use cat_paws_core::graph::ArithOp;
+    use cat_paws_core::{DataType, NodeKind};
+
+    /// Floats stop counting whole numbers exactly at 2^53 — a thousand times sooner than
+    /// integers run out. So "use a float instead" is bad advice for someone who has hit
+    /// the integer ceiling, and it was advice this project was giving. Anywhere the
+    /// ceiling is mentioned has to mention that too, or it sends people somewhere worse.
+    #[test]
+    fn wherever_the_integer_ceiling_is_named_so_is_the_float_one() {
+        const FLOAT_CEILING: &str = "9,007,199,254,740,992";
+        for kind in [
+            NodeKind::LitInt(0),
+            NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float },
+        ] {
+            let text = kind.caution().expect("should carry a caution");
+            assert!(
+                text.contains(FLOAT_CEILING),
+                "{kind:?} talks about size without saying where floats give up:\n{text}"
+            );
+        }
+    }
+
+    /// And it has to say the number goes *wrong*, not merely that it "wraps" — which
+    /// means nothing to someone who has not met the word before.
+    #[test]
+    fn the_integer_caution_says_the_answer_becomes_wrong() {
+        let text = NodeKind::LitInt(0).caution().unwrap();
+        assert!(
+            text.contains("wrong"),
+            "the caution describes the mechanism but never says the answer is wrong:\n{text}"
+        );
+    }
+}
