@@ -144,10 +144,7 @@ pub fn pin_offset(_kind: &NodeKind, side: Side, index: usize) -> Vec2 {
         Side::In => 0.0,
         Side::Out => NODE_WIDTH,
     };
-    vec2(
-        x,
-        HEADER_H + BODY_PAD + ROW_H * index as f32 + ROW_H * 0.5,
-    )
+    vec2(x, HEADER_H + BODY_PAD + ROW_H * index as f32 + ROW_H * 0.5)
 }
 
 fn node_rect(view: &View, rect: Rect, pos: (f32, f32), kind: &NodeKind) -> Rect {
@@ -164,7 +161,10 @@ fn info_rect(view: &View, rect: Rect, pos: (f32, f32), kind: &NodeKind) -> Rect 
     let size = (14.0 * view.zoom).clamp(9.0, 22.0);
     let pad = (10.0 * view.zoom).max(5.0);
     Rect::from_center_size(
-        pos2(r.max.x - pad - size / 2.0, r.min.y + HEADER_H * view.zoom / 2.0),
+        pos2(
+            r.max.x - pad - size / 2.0,
+            r.min.y + HEADER_H * view.zoom / 2.0,
+        ),
         vec2(size, size),
     )
 }
@@ -311,7 +311,14 @@ impl CatPaws {
             let strong = i % 4 == 0;
             painter.line_segment(
                 [pos2(x, rect.min.y), pos2(x, rect.max.y)],
-                Stroke::new(1.0, if strong { palette.grid_strong } else { palette.grid }),
+                Stroke::new(
+                    1.0,
+                    if strong {
+                        palette.grid_strong
+                    } else {
+                        palette.grid
+                    },
+                ),
             );
             x += step;
             i += 1;
@@ -322,7 +329,14 @@ impl CatPaws {
             let strong = j % 4 == 0;
             painter.line_segment(
                 [pos2(rect.min.x, y), pos2(rect.max.x, y)],
-                Stroke::new(1.0, if strong { palette.grid_strong } else { palette.grid }),
+                Stroke::new(
+                    1.0,
+                    if strong {
+                        palette.grid_strong
+                    } else {
+                        palette.grid
+                    },
+                ),
             );
             y += step;
             j += 1;
@@ -580,15 +594,18 @@ impl CatPaws {
             ) else {
                 continue;
             };
-            let kind = self
-                .graph
-                .pin_kind(link.from)
-                .unwrap_or(PinKind::Exec);
+            let kind = self.graph.pin_kind(link.from).unwrap_or(PinKind::Exec);
             let width = match kind {
                 PinKind::Exec => 3.0,
                 PinKind::Data(_) => 2.0,
             };
-            draw_wire(painter, a, b, pin_color(palette, kind), width * self.view.zoom);
+            draw_wire(
+                painter,
+                a,
+                b,
+                pin_color(palette, kind),
+                width * self.view.zoom,
+            );
         }
     }
 
@@ -704,7 +721,10 @@ impl CatPaws {
                 );
                 text_semibold(
                     &text,
-                    pos2(header.min.x + pad_x, top + title_px + 4.0 + subtitle_px / 2.0),
+                    pos2(
+                        header.min.x + pad_x,
+                        top + title_px + 4.0 + subtitle_px / 2.0,
+                    ),
                     Align2::LEFT_CENTER,
                     &node.kind.subtitle(),
                     FontId::proportional(subtitle_px),
@@ -733,7 +753,9 @@ impl CatPaws {
                     crate::icons::Icon::Info,
                     // Quiet until you go near it: a permanent bright mark on half the
                     // nodes reads as an error, and none of these are errors.
-                    palette.on_category().gamma_multiply(if lit { 1.0 } else { 0.55 }),
+                    palette
+                        .on_category()
+                        .gamma_multiply(if lit { 1.0 } else { 0.55 }),
                 );
             }
 
@@ -789,7 +811,11 @@ impl CatPaws {
 
         for (side, pins) in [(Side::In, &inputs), (Side::Out, &outputs)] {
             for (index, pin) in pins.iter().enumerate() {
-                let r = PinRef { node: id, side, index };
+                let r = PinRef {
+                    node: id,
+                    side,
+                    index,
+                };
                 let Some(center) = pin_screen_pos(&self.view, rect, &self.graph, r) else {
                     continue;
                 };
@@ -908,10 +934,7 @@ mod tests {
             NodeKind::LitInt(7),
         ] {
             let size = node_size(&kind);
-            for (side, pins) in [
-                (Side::In, kind.inputs()),
-                (Side::Out, kind.outputs()),
-            ] {
+            for (side, pins) in [(Side::In, kind.inputs()), (Side::Out, kind.outputs())] {
                 for index in 0..pins.len() {
                     let offset = pin_offset(&kind, side, index);
                     let expected_x = match side {
@@ -1004,7 +1027,10 @@ mod tests {
     #[test]
     fn subtitle_is_dropped_only_when_it_cannot_fit() {
         assert!(subtitle_fits(1.0), "subtitle should show at 100%");
-        assert!(!subtitle_fits(0.35), "subtitle cannot fit when fully zoomed out");
+        assert!(
+            !subtitle_fits(0.35),
+            "subtitle cannot fit when fully zoomed out"
+        );
 
         for zoom in [0.35_f32, 0.5, 0.75, 1.0, 2.5] {
             if subtitle_fits(zoom) {
@@ -1067,22 +1093,28 @@ mod caution_icon {
     fn the_icon_stays_inside_its_own_header() {
         let rect = canvas_rect();
         for zoom in [0.35_f32, 0.6, 1.0, 1.8, 3.0] {
-            let view = View { zoom, ..Default::default() };
+            let view = View {
+                zoom,
+                ..Default::default()
+            };
             for kind in [
                 NodeKind::Repeat,
                 NodeKind::Branch,
                 NodeKind::LessThan,
                 NodeKind::LitInt(7),
                 NodeKind::LitFloat(0.5),
-                NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int },
-                NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int },
+                NodeKind::Arith {
+                    op: ArithOp::Add,
+                    ty: DataType::Int,
+                },
+                NodeKind::Arith {
+                    op: ArithOp::Divide,
+                    ty: DataType::Int,
+                },
             ] {
                 let node = node_rect(&view, rect, (0.0, 0.0), &kind);
                 let icon = info_rect(&view, rect, (0.0, 0.0), &kind);
-                let header = Rect::from_min_size(
-                    node.min,
-                    vec2(node.width(), HEADER_H * zoom),
-                );
+                let header = Rect::from_min_size(node.min, vec2(node.width(), HEADER_H * zoom));
                 assert!(
                     header.contains_rect(icon),
                     "at zoom {zoom} the icon on {kind:?} escapes its header: {icon:?} vs {header:?}"
@@ -1097,7 +1129,10 @@ mod caution_icon {
     fn the_icon_keeps_clear_of_the_title() {
         let rect = canvas_rect();
         let view = View::default();
-        let kind = NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int };
+        let kind = NodeKind::Arith {
+            op: ArithOp::Add,
+            ty: DataType::Int,
+        };
         let node = node_rect(&view, rect, (0.0, 0.0), &kind);
         let icon = info_rect(&view, rect, (0.0, 0.0), &kind);
         assert!(
@@ -1122,11 +1157,26 @@ mod caution_icon {
             NodeKind::Print { ty: DataType::Str },
             NodeKind::Print { ty: DataType::Int },
             NodeKind::LessThan,
-            NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int },
-            NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int },
-            NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float },
-            NodeKind::GetVar { name: "x".into(), ty: DataType::Int },
-            NodeKind::SetVar { name: "x".into(), ty: DataType::Int },
+            NodeKind::Arith {
+                op: ArithOp::Add,
+                ty: DataType::Int,
+            },
+            NodeKind::Arith {
+                op: ArithOp::Divide,
+                ty: DataType::Int,
+            },
+            NodeKind::Arith {
+                op: ArithOp::Add,
+                ty: DataType::Float,
+            },
+            NodeKind::GetVar {
+                name: "x".into(),
+                ty: DataType::Int,
+            },
+            NodeKind::SetVar {
+                name: "x".into(),
+                ty: DataType::Int,
+            },
             NodeKind::LitInt(0),
             NodeKind::LitFloat(0.0),
             NodeKind::LitBool(true),
@@ -1139,9 +1189,12 @@ mod caution_icon {
     /// The one a beginner needs most: a variable does not keep itself up to date.
     #[test]
     fn set_explains_that_it_does_not_keep_holding() {
-        let text = NodeKind::SetVar { name: "total".into(), ty: DataType::Int }
-            .caution()
-            .expect("Set should carry a caution");
+        let text = NodeKind::SetVar {
+            name: "total".into(),
+            ty: DataType::Int,
+        }
+        .caution()
+        .expect("Set should carry a caution");
         assert!(text.contains("not a rule that keeps holding"), "{text}");
     }
 
@@ -1149,8 +1202,18 @@ mod caution_icon {
     /// far more often than the ceiling does.
     #[test]
     fn dividing_whole_numbers_gets_its_own_note() {
-        let divide = NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int }.caution().unwrap();
-        let add = NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int }.caution().unwrap();
+        let divide = NodeKind::Arith {
+            op: ArithOp::Divide,
+            ty: DataType::Int,
+        }
+        .caution()
+        .unwrap();
+        let add = NodeKind::Arith {
+            op: ArithOp::Add,
+            ty: DataType::Int,
+        }
+        .caution()
+        .unwrap();
         assert!(divide.contains("remainder"), "{divide}");
         assert!(add.contains("wraps"), "{add}");
         assert_ne!(divide, add);
@@ -1164,9 +1227,27 @@ mod caution_wording {
 
     fn all_cautions() -> Vec<(&'static str, &'static str)> {
         [
-            ("add int", NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int }),
-            ("divide int", NodeKind::Arith { op: ArithOp::Divide, ty: DataType::Int }),
-            ("add float", NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float }),
+            (
+                "add int",
+                NodeKind::Arith {
+                    op: ArithOp::Add,
+                    ty: DataType::Int,
+                },
+            ),
+            (
+                "divide int",
+                NodeKind::Arith {
+                    op: ArithOp::Divide,
+                    ty: DataType::Int,
+                },
+            ),
+            (
+                "add float",
+                NodeKind::Arith {
+                    op: ArithOp::Add,
+                    ty: DataType::Float,
+                },
+            ),
             ("repeat", NodeKind::Repeat),
             ("branch", NodeKind::Branch),
             ("less than", NodeKind::LessThan),
@@ -1210,7 +1291,10 @@ mod caution_wording {
     fn the_behaviour_comes_before_the_consequence() {
         for (name, text) in all_cautions() {
             let at = text.find("What that means:").expect("checked above");
-            assert!(at > 0, "{name} opens with the consequence and never says the cause");
+            assert!(
+                at > 0,
+                "{name} opens with the consequence and never says the cause"
+            );
             assert!(
                 text[..at].trim().len() > 20,
                 "{name} barely describes the behaviour before explaining it"
@@ -1233,7 +1317,10 @@ mod float_is_not_an_escape {
         const FLOAT_CEILING: &str = "9,007,199,254,740,992";
         for kind in [
             NodeKind::LitInt(0),
-            NodeKind::Arith { op: ArithOp::Add, ty: DataType::Float },
+            NodeKind::Arith {
+                op: ArithOp::Add,
+                ty: DataType::Float,
+            },
         ] {
             let text = kind.caution().expect("should carry a caution");
             assert!(

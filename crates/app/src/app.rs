@@ -18,6 +18,17 @@ pub enum Status {
     Failed(String),
 }
 
+/// What the middle of the window is showing.
+///
+/// The written form began as a five-row box wedged into the side panel, which was enough
+/// to prove it worked and far too small to write in. It is a way of authoring a whole
+/// program, so it gets the same room the canvas has.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
+    Canvas,
+    Write,
+}
+
 pub struct CatPaws {
     pub graph: Graph,
     pub view: View,
@@ -41,6 +52,8 @@ pub struct CatPaws {
     pub show_wasm: bool,
     /// What is typed in the write box. Never saved — it makes nodes and is cleared.
     pub written: String,
+    /// Which view fills the middle of the window.
+    pub tab: Tab,
     pub written_problems: Vec<cat_paws_core::written::Problem>,
 
     new_var_name: String,
@@ -88,6 +101,7 @@ impl CatPaws {
             show_listing: false,
             show_wasm: false,
             written: String::new(),
+            tab: Tab::Canvas,
             written_problems: Vec::new(),
             new_var_name: String::new(),
             new_var_type: DataType::Int,
@@ -132,6 +146,11 @@ impl CatPaws {
         if self.undo_stack.len() > UNDO_LIMIT {
             self.undo_stack.remove(0);
         }
+    }
+
+    /// Drop the most recent snapshot, for a change that turned out not to happen.
+    pub(crate) fn forget_last_undo(&mut self) {
+        self.undo_stack.pop();
     }
 
     pub(crate) fn can_undo(&self) -> bool {
@@ -179,7 +198,9 @@ impl CatPaws {
     /// off-screen, which is exactly when the reader needs help finding it, and a click
     /// that highlights something they cannot see looks like a click that did nothing.
     pub(crate) fn centre_on(&mut self, id: NodeId) {
-        let Some(node) = self.graph.node(id) else { return };
+        let Some(node) = self.graph.node(id) else {
+            return;
+        };
         let size = crate::canvas::node_size(&node.kind);
         let middle = egui::vec2(node.pos.0 + size.x / 2.0, node.pos.1 + size.y / 2.0);
         // to_screen is `rect.min + pan + world * zoom`, so the pan that puts `middle` at
@@ -223,7 +244,9 @@ impl CatPaws {
         if !self.compile() {
             return;
         }
-        let Some(bytes) = self.wasm.clone() else { return };
+        let Some(bytes) = self.wasm.clone() else {
+            return;
+        };
         let outcome = crate::runner::run(&bytes);
         self.output = outcome.output;
         self.status = match outcome.error {
@@ -243,7 +266,9 @@ impl CatPaws {
         let center = self
             .view
             .to_world(self.last_canvas, self.last_canvas.center());
-        let id = self.graph.add_node(kind, (center.x - 98.0, center.y - 40.0));
+        let id = self
+            .graph
+            .add_node(kind, (center.x - 98.0, center.y - 40.0));
         self.select_only(id);
         self.mark_stale();
     }
@@ -442,6 +467,55 @@ impl CatPaws {
         });
     }
 
+    /// The row that chooses what fills the middle of the window.
+    fn ui_tabs(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette();
+        egui::Panel::top("tabs").show(ui, |ui| {
+            ui.add_space(3.0);
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                for (tab, label, hint) in [
+                    (Tab::Canvas, "Canvas", "Build the program by dragging nodes"),
+                    (Tab::Write, "Write", "Type a program and turn it into nodes"),
+                ] {
+                    let chosen = self.tab == tab;
+                    let text = RichText::new(label).color(if chosen {
+                        palette.text_strong
+                    } else {
+                        palette.text_faint
+                    });
+                    let button = egui::Button::new(text)
+                        .fill(if chosen {
+                            palette.category_color(Category::Flow).gamma_multiply(0.34)
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .min_size(egui::vec2(84.0, 24.0));
+                    if ui.add(button).on_hover_text(hint).clicked() {
+                        self.tab = tab;
+                    }
+                }
+                // How many problems are waiting, so switching away does not hide them.
+                if !self.written_problems.is_empty() && self.tab != Tab::Write {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} problem{} in what you wrote",
+                            self.written_problems.len(),
+                            if self.written_problems.len() == 1 {
+                                ""
+                            } else {
+                                "s"
+                            }
+                        ))
+                        .size(12.5)
+                        .color(palette.error),
+                    );
+                }
+            });
+            ui.add_space(3.0);
+        });
+    }
+
     fn ui_side_panel(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette();
         egui::Panel::left("side")
@@ -449,141 +523,100 @@ impl CatPaws {
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(6.0);
-                    ui.label(RichText::new("WRITE NODES").size(12.5).color(palette.text_faint));
-                    ui.add_space(4.0);
-                    ui.add(
-                        egui::TextEdit::multiline(&mut self.written)
-                            .desired_rows(5)
-                            .desired_width(f32::INFINITY)
-                            .font(egui::TextStyle::Monospace)
-                            .hint_text("declare 'health' = integer '20'"),
-                    );
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("Create nodes").color(palette.text_strong),
-                            )
-                            .fill(palette.category_color(Category::Flow).gamma_multiply(0.28))
-                            .min_size(egui::vec2(ui.available_width(), 24.0)),
-                        )
-                        .clicked()
-                        && !self.written.trim().is_empty()
-                    {
-                        self.push_undo();
-                        // Added beside what is already there, never replacing it, so
-                        // typing can never destroy something built by hand.
-                        match cat_paws_core::written::generate(&mut self.graph, &self.written) {
-                            Ok(made) => {
-                                self.written.clear();
-                                self.written_problems.clear();
-                                self.mark_stale();
-                                self.status = Status::Ok(format!(
-                                    "made {} node{}",
-                                    made.len(),
-                                    if made.len() == 1 { "" } else { "s" }
-                                ));
-                            }
-                            Err(problems) => {
-                                self.status = Status::Failed(format!(
-                                    "{} problem{} in what you wrote",
-                                    problems.len(),
-                                    if problems.len() == 1 { "" } else { "s" }
-                                ));
-                                self.written_problems = problems;
-                            }
-                        }
-                    }
-                    for p in &self.written_problems {
-                        ui.add(egui::Label::new(
-                            RichText::new(format!("line {}: {}", p.line, p.message))
-                                .size(12.0)
-                                .color(palette.error),
-                        ));
-                        ui.horizontal(|ui| {
-                            ui.add_space(8.0);
-                            ui.add(egui::Label::new(
-                                RichText::new(format!("try: {}", p.fix))
-                                    .size(11.5)
-                                    .color(palette.text_faint),
-                            ));
-                        });
-                    }
-
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("ADD NODE").size(12.5).color(palette.text_faint));
-                    ui.add_space(4.0);
-
-                    let buttons: Vec<(&str, NodeKind)> = vec![
-                        ("Event start", NodeKind::EventStart),
-                        ("Branch", NodeKind::Branch),
-                        ("Repeat", NodeKind::Repeat),
-                        ("Print text", NodeKind::Print { ty: DataType::Str }),
-                        ("Print number", NodeKind::Print { ty: DataType::Int }),
-                        ("Less than", NodeKind::LessThan),
-                        (
-                            "Add +",
-                            NodeKind::Arith {
-                                op: ArithOp::Add,
-                                ty: DataType::Int,
-                            },
-                        ),
-                        (
-                            "Subtract −",
-                            NodeKind::Arith {
-                                op: ArithOp::Subtract,
-                                ty: DataType::Int,
-                            },
-                        ),
-                        (
-                            "Multiply ×",
-                            NodeKind::Arith {
-                                op: ArithOp::Multiply,
-                                ty: DataType::Int,
-                            },
-                        ),
-                        (
-                            "Divide ÷",
-                            NodeKind::Arith {
-                                op: ArithOp::Divide,
-                                ty: DataType::Int,
-                            },
-                        ),
-                        ("Number", NodeKind::LitInt(0)),
-                        ("Text", NodeKind::LitStr("hello".to_string())),
-                        ("True / false", NodeKind::LitBool(true)),
-                    ];
-                    for (label, kind) in buttons {
-                        let color = palette.category_color(kind.category());
-                        let r = ui.add(
-                            egui::Button::new(RichText::new(label).color(palette.text_strong))
-                                .fill(color.gamma_multiply(0.28))
-                                .min_size(egui::vec2(ui.available_width(), 24.0))
-                                .sense(egui::Sense::click_and_drag()),
+                    // Dragging a node out has nowhere to land while the canvas is not
+                    // showing, and "selected node" is a canvas idea too. The variables
+                    // stay: knowing what exists is exactly what you want while writing.
+                    let on_canvas = self.tab == Tab::Canvas;
+                    if on_canvas {
+                        ui.label(
+                            RichText::new("ADD NODE")
+                                .size(12.5)
+                                .color(palette.text_faint),
                         );
-                        // Drag to place it where you let go; click to drop it in the
-                        // middle of the view. Clicking still works because a button that
-                        // does nothing when clicked reads as broken, whatever it says.
-                        if r.drag_started() {
-                            self.dragging_new = Some(kind.clone());
-                        } else if r.clicked() {
-                            self.add_node(kind);
-                        }
-                        if r.hovered() || r.dragged() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        ui.add_space(4.0);
+
+                        let buttons: Vec<(&str, NodeKind)> = vec![
+                            ("Event start", NodeKind::EventStart),
+                            ("Branch", NodeKind::Branch),
+                            ("Repeat", NodeKind::Repeat),
+                            ("Print text", NodeKind::Print { ty: DataType::Str }),
+                            ("Print number", NodeKind::Print { ty: DataType::Int }),
+                            ("Less than", NodeKind::LessThan),
+                            (
+                                "Add +",
+                                NodeKind::Arith {
+                                    op: ArithOp::Add,
+                                    ty: DataType::Int,
+                                },
+                            ),
+                            (
+                                "Subtract −",
+                                NodeKind::Arith {
+                                    op: ArithOp::Subtract,
+                                    ty: DataType::Int,
+                                },
+                            ),
+                            (
+                                "Multiply ×",
+                                NodeKind::Arith {
+                                    op: ArithOp::Multiply,
+                                    ty: DataType::Int,
+                                },
+                            ),
+                            (
+                                "Divide ÷",
+                                NodeKind::Arith {
+                                    op: ArithOp::Divide,
+                                    ty: DataType::Int,
+                                },
+                            ),
+                            ("Number", NodeKind::LitInt(0)),
+                            ("Text", NodeKind::LitStr("hello".to_string())),
+                            ("True / false", NodeKind::LitBool(true)),
+                        ];
+                        for (label, kind) in buttons {
+                            let color = palette.category_color(kind.category());
+                            let r = ui.add(
+                                egui::Button::new(RichText::new(label).color(palette.text_strong))
+                                    .fill(color.gamma_multiply(0.28))
+                                    .min_size(egui::vec2(ui.available_width(), 24.0))
+                                    .sense(egui::Sense::click_and_drag()),
+                            );
+                            // Drag to place it where you let go; click to drop it in the
+                            // middle of the view. Clicking still works because a button that
+                            // does nothing when clicked reads as broken, whatever it says.
+                            if r.drag_started() {
+                                self.dragging_new = Some(kind.clone());
+                            } else if r.clicked() {
+                                self.add_node(kind);
+                            }
+                            if r.hovered() || r.dragged() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                            }
                         }
                     }
 
                     ui.add_space(12.0);
                     ui.separator();
-                    ui.label(RichText::new("VARIABLES").size(12.5).color(palette.text_faint));
+                    ui.label(
+                        RichText::new("VARIABLES")
+                            .size(12.5)
+                            .color(palette.text_faint),
+                    );
                     ui.add_space(4.0);
                     self.ui_variables(ui);
 
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.label(RichText::new("SELECTED NODE").size(12.5).color(palette.text_faint));
-                    ui.add_space(4.0);
-                    self.ui_inspector(ui);
+                    if on_canvas {
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.label(
+                            RichText::new("SELECTED NODE")
+                                .size(12.5)
+                                .color(palette.text_faint),
+                        );
+                        ui.add_space(4.0);
+                        self.ui_inspector(ui);
+                    }
                 });
             });
     }
@@ -760,9 +793,7 @@ impl CatPaws {
                     edited_int = done;
                     Some((r, false))
                 }
-                NodeKind::LitFloat(v) => {
-                    Some((ui.add(egui::DragValue::new(v).speed(0.1)), false))
-                }
+                NodeKind::LitFloat(v) => Some((ui.add(egui::DragValue::new(v).speed(0.1)), false)),
                 NodeKind::LitBool(v) => Some((ui.checkbox(v, "true"), true)),
                 NodeKind::LitStr(v) => Some((ui.text_edit_singleline(v), false)),
                 _ => None,
@@ -858,6 +889,121 @@ impl CatPaws {
             out.push('\n');
         }
         out
+    }
+
+    /// The written form, given the whole middle of the window.
+    fn ui_write(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette();
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            ui.label(
+                RichText::new("Type a program; it becomes nodes on the canvas.")
+                    .color(palette.text_faint),
+            );
+        });
+        ui.add_space(8.0);
+
+        egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(12, 0))
+            .show(ui, |ui| {
+                // Room for a real program rather than the five rows it had in the panel,
+                // and the problems sit under it where a reader is already looking.
+                let height = (ui.available_height() - 150.0).max(160.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("write-text")
+                    .max_height(height)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.written)
+                                .desired_rows(18)
+                                .desired_width(f32::INFINITY)
+                                .font(egui::TextStyle::Monospace)
+                                .hint_text(
+                                    "declare 'health' = integer '20'\n\
+                                     if 'health' < integer '50' {\n\
+                                     \u{20}   print string 'low health'\n\
+                                     } else {\n\
+                                     \u{20}   print string 'fine'\n\
+                                     }",
+                                ),
+                        );
+                    });
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let make = ui.add(
+                        egui::Button::new(RichText::new("Create nodes").color(palette.text_strong))
+                            .fill(palette.category_color(Category::Flow).gamma_multiply(0.28))
+                            .min_size(egui::vec2(140.0, 26.0)),
+                    );
+                    if make.clicked() && !self.written.trim().is_empty() {
+                        self.create_written_nodes(ui);
+                    }
+                    if !self.written.trim().is_empty() && ui.button("Clear").clicked() {
+                        self.written.clear();
+                        self.written_problems.clear();
+                    }
+                });
+
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("write-problems")
+                    .show(ui, |ui| {
+                        for p in &self.written_problems {
+                            ui.add(egui::Label::new(
+                                RichText::new(format!("line {}: {}", p.line, p.message))
+                                    .color(palette.error),
+                            ));
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.add(egui::Label::new(
+                                    RichText::new(format!("try: {}", p.fix))
+                                        .size(12.5)
+                                        .color(palette.text_faint),
+                                ));
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+            });
+    }
+
+    /// Generate the nodes, and hand focus back so the result can be undone.
+    ///
+    /// Ctrl/Cmd+Z is deliberately ignored while a text field has focus, so that undoing
+    /// inside the box means undoing the *typing*. But the box keeps focus after the
+    /// button is pressed, so the very moment someone most wants to undo — right after
+    /// seeing what appeared — the shortcut did nothing at all.
+    fn create_written_nodes(&mut self, ui: &egui::Ui) {
+        self.push_undo();
+        // Added beside what is already there, never replacing it, so typing can never
+        // destroy something built by hand.
+        match cat_paws_core::written::generate(&mut self.graph, &self.written) {
+            Ok(made) => {
+                self.written.clear();
+                self.written_problems.clear();
+                self.mark_stale();
+                self.status = Status::Ok(format!(
+                    "made {} node{} — undo puts them back",
+                    made.len(),
+                    if made.len() == 1 { "" } else { "s" }
+                ));
+                ui.memory_mut(|m| m.stop_text_input());
+                self.tab = Tab::Canvas;
+            }
+            Err(problems) => {
+                // A refused program changed nothing, so the snapshot just taken would be
+                // an undo step that does nothing. Drop it.
+                self.forget_last_undo();
+                self.status = Status::Failed(format!(
+                    "{} problem{} in what you wrote",
+                    problems.len(),
+                    if problems.len() == 1 { "" } else { "s" }
+                ));
+                self.written_problems = problems;
+            }
+        }
     }
 
     fn ui_bottom(&mut self, ui: &mut egui::Ui) {
@@ -1029,9 +1175,8 @@ impl eframe::App for CatPaws {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // `command` is already Cmd on macOS and Ctrl elsewhere; `ctrl` is also
         // accepted so Ctrl+Z works on a Mac too.
-        let undo_shortcut = ui.input(|i| {
-            (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Z)
-        });
+        let undo_shortcut =
+            ui.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Z));
         // Don't steal Cmd+Z from a text field the user is typing in.
         //
         // This must ask specifically about a *text edit*. `memory().focused()` is
@@ -1043,15 +1188,19 @@ impl eframe::App for CatPaws {
         }
 
         self.ui_toolbar(ui);
+        self.ui_tabs(ui);
         self.ui_side_panel(ui);
         self.ui_bottom(ui);
 
         let palette = self.palette();
         egui::CentralPanel::no_frame()
             .frame(egui::Frame::NONE.fill(palette.canvas))
-            .show(ui, |ui| {
-                self.last_canvas = ui.available_rect_before_wrap();
-                self.ui_canvas(ui);
+            .show(ui, |ui| match self.tab {
+                Tab::Canvas => {
+                    self.last_canvas = ui.available_rect_before_wrap();
+                    self.ui_canvas(ui);
+                }
+                Tab::Write => self.ui_write(ui),
             });
 
         // After the panels, so the carried node is drawn over all of them.
@@ -1143,7 +1292,10 @@ mod tests {
         app.push_undo();
         app.graph.remove_node(branch);
         assert_eq!(app.graph.node_ids().len(), nodes_before - 1);
-        assert!(app.graph.links().len() < links_before, "wires should have gone too");
+        assert!(
+            app.graph.links().len() < links_before,
+            "wires should have gone too"
+        );
 
         app.undo();
         assert_eq!(app.graph.node_ids().len(), nodes_before);
@@ -1198,7 +1350,8 @@ mod tests {
         app.undo();
         assert!(app.graph.node(added).is_none());
         assert_eq!(
-            app.selected_one(), None,
+            app.selected_one(),
+            None,
             "selection must not dangle on a node undo removed"
         );
     }
@@ -1220,8 +1373,16 @@ mod tests {
         let text = first_node_of(&app, &NodeKind::LitStr(String::new()));
         let branch = first_node_of(&app, &NodeKind::Branch);
 
-        let from = PinRef { node: text, side: Side::Out, index: 0 };
-        let to = PinRef { node: branch, side: Side::In, index: 1 };
+        let from = PinRef {
+            node: text,
+            side: Side::Out,
+            index: 0,
+        };
+        let to = PinRef {
+            node: branch,
+            side: Side::In,
+            index: 1,
+        };
         // Sanity: this is a string into a boolean condition.
         assert!(matches!(app.graph.pin_kind(to), Some(PinKind::Data(_))));
         assert!(app.graph.connect(from, to).is_err());
@@ -1350,14 +1511,20 @@ mod dragging_out_of_the_palette {
     /// and fails in the hand.
     #[test]
     fn what_you_let_go_of_is_where_it_lands() {
-        let kind = NodeKind::Arith { op: ArithOp::Add, ty: DataType::Int };
+        let kind = NodeKind::Arith {
+            op: ArithOp::Add,
+            ty: DataType::Int,
+        };
         for zoom in [0.4_f32, 0.75, 1.0, 1.6, 2.5] {
             for pointer in [
                 egui::pos2(300.0, 120.0),
                 egui::pos2(700.0, 400.0),
                 egui::pos2(1100.0, 690.0),
             ] {
-                let view = View { zoom, ..Default::default() };
+                let view = View {
+                    zoom,
+                    ..Default::default()
+                };
                 let preview = CatPaws::carried_rect(&view, pointer, &kind);
                 let dropped = CatPaws::dropped_position(&view, canvas(), pointer);
                 let landed = view.to_screen(canvas(), egui::pos2(dropped.0, dropped.1));
@@ -1378,7 +1545,10 @@ mod dragging_out_of_the_palette {
         let view = View::default();
         let pointer = egui::pos2(600.0, 300.0);
         let rect = CatPaws::carried_rect(&view, pointer, &kind);
-        assert!(rect.contains(pointer), "the pointer should be on the node it is carrying");
+        assert!(
+            rect.contains(pointer),
+            "the pointer should be on the node it is carrying"
+        );
         assert!(
             pointer.y - rect.min.y < crate::canvas::HEADER_H,
             "the pointer should be within the header, not down in the body"
@@ -1411,7 +1581,6 @@ mod dragging_out_of_the_palette {
         assert_eq!(app.graph.node_ids().len(), before + 1);
     }
 }
-
 
 /// A whole-number field that shows the number it actually holds.
 ///
@@ -1520,7 +1689,10 @@ mod copying_the_console {
         app.graph = Graph::new(); // no Event start, so compiling must fail
         app.compile();
         let text = app.console_text();
-        assert!(text.contains("Event start"), "the message is missing:\n{text}");
+        assert!(
+            text.contains("Event start"),
+            "the message is missing:\n{text}"
+        );
         assert!(text.contains("try:"), "the fix is missing:\n{text}");
         assert!(text.contains("CP-FLOW-01"), "the code is missing:\n{text}");
     }
@@ -1549,9 +1721,13 @@ mod selecting_several {
     fn three_nodes() -> CatPaws {
         let mut app = CatPaws::fresh();
         app.graph = Graph::new();
-        for (i, kind) in [NodeKind::LitInt(1), NodeKind::LitInt(2), NodeKind::LitInt(3)]
-            .into_iter()
-            .enumerate()
+        for (i, kind) in [
+            NodeKind::LitInt(1),
+            NodeKind::LitInt(2),
+            NodeKind::LitInt(3),
+        ]
+        .into_iter()
+        .enumerate()
         {
             app.graph.add_node(kind, (i as f32 * 300.0, 0.0));
         }
@@ -1592,7 +1768,10 @@ mod selecting_several {
         app.selection.extend(ids.clone());
         app.graph.remove_node(ids[1]);
         app.mark_stale();
-        assert!(!app.selection.contains(&ids[1]), "a ghost is still selected");
+        assert!(
+            !app.selection.contains(&ids[1]),
+            "a ghost is still selected"
+        );
         assert_eq!(app.selection.len(), 2);
     }
 
@@ -1604,7 +1783,10 @@ mod selecting_several {
         app.graph = Graph::new();
         app.graph.declare_var("score".into(), DataType::Int);
         let id = app.graph.add_node(
-            NodeKind::GetVar { name: "score".into(), ty: DataType::Int },
+            NodeKind::GetVar {
+                name: "score".into(),
+                ty: DataType::Int,
+            },
             (0.0, 0.0),
         );
         app.select_only(id);
@@ -1617,7 +1799,10 @@ mod selecting_several {
             _ => None,
         };
         assert_eq!(name.as_deref(), Some("score"));
-        assert!(app.graph.vars.contains_key("score"), "it edits the variable itself");
+        assert!(
+            app.graph.vars.contains_key("score"),
+            "it edits the variable itself"
+        );
     }
 }
 
@@ -1673,8 +1858,16 @@ mod whole_numbers_read_true {
         assert_eq!(typed("9,223,372,036,854,775,807"), Some(i64::MAX));
         assert_eq!(typed("-9,223,372,036,854,775,808"), Some(i64::MIN));
         assert_eq!(typed("1,000"), Some(1000));
-        assert_eq!(typed("1 000 000"), Some(1_000_000), "spaces group numbers too");
-        assert_eq!(typed("1_000_000"), Some(1_000_000), "and underscores, as in code");
+        assert_eq!(
+            typed("1 000 000"),
+            Some(1_000_000),
+            "spaces group numbers too"
+        );
+        assert_eq!(
+            typed("1_000_000"),
+            Some(1_000_000),
+            "and underscores, as in code"
+        );
         assert_eq!(typed("−42"), Some(-42), "the minus egui itself displays");
     }
 
@@ -1699,9 +1892,9 @@ mod whole_numbers_read_true {
     #[test]
     fn numbers_past_the_reach_of_a_float_are_exact() {
         for v in [
-            9_007_199_254_740_993_i64,      // 2^53 + 1, the first f64 cannot hold
+            9_007_199_254_740_993_i64, // 2^53 + 1, the first f64 cannot hold
             922_337_203_685_477_580,
-            922_337_203_685_477_581,        // its neighbour: an f64 rounds both the same
+            922_337_203_685_477_581, // its neighbour: an f64 rounds both the same
             i64::MAX - 1,
             i64::MAX,
             i64::MIN,
@@ -1716,6 +1909,105 @@ mod whole_numbers_read_true {
     fn a_decimal_or_a_word_is_refused() {
         assert_eq!(typed("1.5"), None);
         assert_eq!(typed("banana"), None);
-        assert_eq!(typed("9223372036854775808"), None, "one past the top is not a whole number here");
+        assert_eq!(
+            typed("9223372036854775808"),
+            None,
+            "one past the top is not a whole number here"
+        );
+    }
+}
+
+#[cfg(test)]
+mod writing_in_its_own_tab {
+    use super::*;
+
+    fn generate(app: &mut CatPaws, text: &str) -> Result<usize, usize> {
+        // What `create_written_nodes` does to the model, without a Ui to hand it.
+        app.written = text.to_string();
+        app.push_undo();
+        match cat_paws_core::written::generate(&mut app.graph, &app.written) {
+            Ok(made) => {
+                app.written.clear();
+                app.written_problems.clear();
+                app.mark_stale();
+                Ok(made.len())
+            }
+            Err(problems) => {
+                app.forget_last_undo();
+                let n = problems.len();
+                app.written_problems = problems;
+                Err(n)
+            }
+        }
+    }
+
+    /// The whole point of the second request: what the written form made can be taken
+    /// back, like anything else on the canvas.
+    #[test]
+    fn generated_nodes_can_be_undone() {
+        let mut app = CatPaws::fresh();
+        let before = app.graph.node_ids();
+
+        let made = generate(&mut app, "print string 'hello'").expect("should read");
+        assert!(made > 0);
+        assert!(app.graph.node_ids().len() > before.len());
+        assert!(app.can_undo(), "there should be a step to undo");
+
+        app.undo();
+        assert_eq!(
+            app.graph.node_ids(),
+            before,
+            "undo did not put the canvas back"
+        );
+    }
+
+    /// Ten lines generate a dozen nodes, and one undo takes all of them — not one node
+    /// at a time, which is what a per-node snapshot would have given.
+    #[test]
+    fn a_whole_program_undoes_in_one_step() {
+        let mut app = CatPaws::fresh();
+        let before = app.graph.node_ids();
+        let made = generate(
+            &mut app,
+            "declare 'n' = integer '0'\n\
+             repeat integer '3' {\n\
+                 set 'n' = 'n' + integer '1'\n\
+             }\n\
+             print 'n'",
+        )
+        .expect("should read");
+        assert!(made >= 8, "expected a program's worth of nodes, got {made}");
+
+        app.undo();
+        assert_eq!(app.graph.node_ids(), before);
+        assert!(
+            !app.can_undo(),
+            "one program should cost exactly one undo step"
+        );
+    }
+
+    /// A refused program changes nothing, so it must not leave an undo step that does
+    /// nothing either — pressing undo would look broken.
+    #[test]
+    fn a_refused_program_leaves_no_empty_undo_step() {
+        let mut app = CatPaws::fresh();
+        let before = app.graph.node_ids();
+
+        let problems = generate(&mut app, "declare 'x' = '10000'").expect_err("should be refused");
+        assert!(problems > 0);
+        assert_eq!(
+            app.graph.node_ids(),
+            before,
+            "a refused program changed the canvas"
+        );
+        assert!(
+            !app.can_undo(),
+            "a refused program left an undo step behind"
+        );
+    }
+
+    #[test]
+    fn the_write_tab_is_not_where_it_starts() {
+        assert_eq!(CatPaws::fresh().tab, Tab::Canvas);
     }
 }

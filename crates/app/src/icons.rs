@@ -46,11 +46,7 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 head_center - perp * half_len - dir * half_thick,
                 head_center + perp * half_len - dir * half_thick,
             ];
-            painter.add(egui::Shape::convex_polygon(
-                quad,
-                color,
-                Stroke::NONE,
-            ));
+            painter.add(egui::Shape::convex_polygon(quad, color, Stroke::NONE));
         }
         Icon::Undo => {
             // An arc over the top, with an arrowhead dropping off the left end.
@@ -89,11 +85,7 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 c + vec2(-r * 0.72, r * 0.92),
                 c + vec2(-r * 0.72, -r * 0.92),
             ];
-            painter.add(egui::Shape::convex_polygon(
-                triangle,
-                color,
-                Stroke::NONE,
-            ));
+            painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
         }
         Icon::Info => {
             // A ring with a dot and a stem. Drawn rather than typed, for the same
@@ -111,23 +103,14 @@ pub fn paint_icon(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
 }
 
 /// A toolbar button: hand-painted icon plus a label.
-pub fn icon_button(
-    ui: &mut Ui,
-    icon: Icon,
-    label: &str,
-    fill: Color32,
-    fg: Color32,
-) -> Response {
+pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str, fill: Color32, fg: Color32) -> Response {
     let font = FontId::proportional(14.0);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, fg);
 
     let icon_size = 16.0;
     let pad = 9.0;
     let gap = 7.0;
-    let size = vec2(
-        pad + icon_size + gap + galley.size().x + pad,
-        26.0,
-    );
+    let size = vec2(pad + icon_size + gap + galley.size().x + pad, 26.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
     if ui.is_rect_visible(rect) {

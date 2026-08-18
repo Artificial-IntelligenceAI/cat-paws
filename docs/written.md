@@ -3,6 +3,19 @@
 Cat Paws is a visual language. This is a way to *type* a program instead of dragging it,
 for when typing is faster.
 
+## Where it lives
+
+Its own tab, beside the canvas. It began as a five-row box wedged into the side panel,
+which was enough to show the idea worked and far too small to write a program in. It
+authors whole programs, so it gets the room the canvas has.
+
+Pressing **Create nodes** switches back to the canvas, because what you wanted was the
+nodes, and leaving you looking at an empty box makes you go and check.
+
+While the Write tab is showing, the palette and the selected-node inspector are hidden —
+dragging a node out has nowhere to land, and "selected node" is a canvas idea. The
+variables stay, because knowing what already exists is exactly what you want while typing.
+
 ## What it is, and is not
 
 **It makes nodes.** You type, it creates nodes on the canvas, already wired. That is all it
@@ -10,6 +23,11 @@ does.
 
 **It is not a file format.** The graph remains the only program there is. Text is never
 saved, never read back out of a graph, and never has to agree with anything.
+
+**It can be undone.** Everything a program generates comes back in a *single* step, not one
+node at a time — ten lines and a dozen nodes are one thing you did, so they are one thing to
+take back. A program that is refused leaves no undo step at all, since it changed nothing
+and an undo that does nothing reads as broken.
 
 **It does not touch layout.** Where nodes sit is the canvas's business. The written form
 has no way to say where something goes, and moving a node in the editor cannot change any
