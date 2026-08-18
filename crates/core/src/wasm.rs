@@ -164,7 +164,7 @@ impl<'a> Emitter<'a> {
                 EXEC_LOOP,
                 id,
                 "the execution wires lead back to a node they already passed through, so this program would never finish",
-                "break the loop by unplugging one of the grey wires — repeating a step is not supported yet",
+                "alt-click one of the grey pins to cut that wire",
             ));
             return;
         }
@@ -175,7 +175,7 @@ impl<'a> Emitter<'a> {
                 VALUE_AS_STEP,
                 id,
                 "the grey wires lead to a node that is not on the canvas any more",
-                "unplug that wire, or undo whatever removed the node",
+                "alt-click the pin to cut that wire, or undo whatever removed the node",
             ));
             return;
         };
@@ -261,7 +261,7 @@ impl<'a> Emitter<'a> {
                 START_IN_CHAIN,
                     id,
                     "an Event start is where the program begins, so it cannot also be a step in the middle of one",
-                    "unplug the grey wire going into this node",
+                    "alt-click the grey pin on the left of this node to cut the wire going into it",
                 ));
             }
             other => {
@@ -272,7 +272,7 @@ impl<'a> Emitter<'a> {
                         "{} produces a value, so it cannot sit in the grey execution chain",
                         other.title()
                     ),
-                    "wire it into a coloured input pin instead of a grey one",
+                    "drag from its coloured output pin into a coloured input pin, not a grey one",
                 ));
             }
         }
@@ -435,7 +435,7 @@ fn entry_point(graph: &Graph) -> Result<NodeId, Vec<Diagnostic>> {
         [] => Err(vec![Diagnostic::global(
                 NO_START,
             "there is no Event start node, so nothing says where the program begins",
-            "right-click the canvas and add an Event start, then wire it to the first step",
+            "click Event start in the ADD NODE list, then drag a wire from its 'then' pin to the first step",
         )]),
         [one] => Ok(*one),
         many => Err(many

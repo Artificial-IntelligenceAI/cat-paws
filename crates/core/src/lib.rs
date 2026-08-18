@@ -1361,3 +1361,116 @@ mod naming_something_that_is_not_there {
         assert_eq!(out, vec!["10000"]);
     }
 }
+
+/// Advice has to name a gesture the editor actually has.
+///
+/// `CP-FLOW-01` — the first error anybody meets, since it is what you get the moment you
+/// delete the Event start — said "right-click the canvas and add an Event start". There is
+/// no context menu in Cat Paws and there never was: right-drag pans, and `index.html`
+/// suppresses the browser's own menu so the pan is not interrupted. The advice could not
+/// be followed, which is worse than no advice, because it teaches that the messages cannot
+/// be trusted.
+#[cfg(test)]
+mod advice_names_a_real_gesture {
+    use super::*;
+
+    /// Everything a diagnostic can tell you to do, gathered by making each error happen.
+    fn every_fix() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+
+        // No Event start.
+        let g = Graph::new();
+        for d in compile(&g).unwrap_err() {
+            out.push((d.code.render(), d.fix));
+        }
+
+        // Two Event starts.
+        let mut g = Graph::new();
+        g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        g.add_node(NodeKind::EventStart, (200.0, 0.0));
+        for d in compile(&g).unwrap_err() {
+            out.push((d.code.render(), d.fix));
+        }
+
+        // An empty input pin, and a divide by zero, and an overflow.
+        for src in [
+            "print integer '1' + integer '1'",
+            "print integer '5' / integer '0'",
+            "print integer '9223372036854775807' + integer '1'",
+        ] {
+            let mut g = Graph::new();
+            if written::generate(&mut g, src).is_ok() {
+                if let Err(ds) = compile(&g) {
+                    for d in ds {
+                        out.push((d.code.render(), d.fix));
+                    }
+                }
+            }
+        }
+
+        // A pin left empty, built by hand.
+        let mut g = Graph::new();
+        let start = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let print = g.add_node(NodeKind::Print { ty: DataType::Str }, (200.0, 0.0));
+        g.connect(
+            PinRef { node: start, side: Side::Out, index: 0 },
+            PinRef { node: print, side: Side::In, index: 0 },
+        )
+        .unwrap();
+        for d in compile(&g).unwrap_err() {
+            out.push((d.code.render(), d.fix));
+        }
+
+        out
+    }
+
+    /// The editor has no context menu. Nothing may suggest one.
+    #[test]
+    fn nothing_tells_you_to_right_click() {
+        for (code, fix) in every_fix() {
+            assert!(
+                !fix.to_lowercase().contains("right-click"),
+                "{code} tells you to right-click, which pans the canvas: {fix}"
+            );
+        }
+    }
+
+    /// No advice may name a gesture this editor does not have.
+    ///
+    /// Stated as a prohibition rather than a requirement, because plenty of good advice
+    /// names no gesture at all — "change the second number to anything other than zero"
+    /// is about the value, not about clicking. What goes wrong is inventing a gesture,
+    /// which is exactly what happened with right-click.
+    #[test]
+    fn no_advice_invents_a_gesture() {
+        // Things other editors have and this one does not.
+        let absent = [
+            "right-click",
+            "right click",
+            "context menu",
+            "double-click",
+            "double click",
+            "middle-click",
+            "menu bar",
+            "toolbar button",
+            "press escape",
+        ];
+        for (code, fix) in every_fix() {
+            let lower = fix.to_lowercase();
+            for gesture in absent {
+                assert!(
+                    !lower.contains(gesture),
+                    "{code} tells you to {gesture}, which Cat Paws has no such thing as: {fix}"
+                );
+            }
+        }
+    }
+
+    /// The first error anybody meets should point at the palette, which is where nodes
+    /// actually come from.
+    #[test]
+    fn a_missing_start_points_at_the_palette() {
+        let fix = &compile(&Graph::new()).unwrap_err()[0].fix;
+        assert!(fix.contains("ADD NODE"), "it does not say where to find one: {fix}");
+    }
+}

@@ -262,3 +262,32 @@ Bring this tab to the front and it carries on.
 
 Plain page text rather than anything drawn on the canvas — so it appears precisely when the
 canvas cannot, including in a screenshot.
+
+## Advice must name a gesture the editor has
+
+`CP-FLOW-01` said **"right-click the canvas and add an Event start"**. Cat Paws has no
+context menu and never has: right-drag pans, and `index.html` suppresses the browser's own
+menu so that pan is not interrupted. The advice could not be followed at all.
+
+It is the first error anybody meets — deleting the Event start is the quickest way to reach
+it — so the first thing a new user was told to do was a thing that does nothing. That is
+worse than saying nothing, because it teaches that the messages are not to be trusted, and
+every message after it is then read with that in mind.
+
+The same fault, quieter, ran through the rest: **"unplug the wire"** is not a gesture
+anybody can guess. The editor's word is *alt-click a pin to cut*, and that is what the
+advice says now.
+
+```
+before   right-click the canvas and add an Event start, then wire it to the first step
+after    click Event start in the ADD NODE list, then drag a wire from its 'then' pin
+         to the first step
+
+before   break the loop by unplugging one of the grey wires
+after    alt-click one of the grey pins to cut that wire
+```
+
+A test now makes every error happen and reads its advice back, forbidding any gesture the
+editor does not have — right-click, double-click, a context menu, a menu bar. It is written
+as a prohibition rather than a requirement on purpose: plenty of good advice names no
+gesture at all, because it is about the value rather than about clicking.
