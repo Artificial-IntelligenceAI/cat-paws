@@ -1397,14 +1397,28 @@ mod dragging_out_of_the_palette {
 /// Both halves are fixed here. Formatting casts the `f64` back the same saturating way
 /// egui stores it, which recovers the exact integer; parsing reads the text as an `i64`
 /// first, so what someone types is what they get rather than the nearest `f64` to it.
+/// Read a whole number the way a person writes one.
+///
+/// Grouping separators are accepted because Cat Paws *hands them out*: the caution on an
+/// integer node reads "whole numbers only reach 9,223,372,036,854,775,807". Teaching a
+/// format and then refusing it is its own small betrayal — and egui's own parser strips
+/// whitespace but not commas, so typing that number back in silently left `9` behind,
+/// every digit after the first comma dropped without a word.
+pub(crate) fn whole_number(text: &str) -> Option<i64> {
+    let cleaned: String = text
+        .chars()
+        // The minus egui shows is U+2212, which `parse` does not accept.
+        .map(|c| if c == '−' { '-' } else { c })
+        .filter(|c| !c.is_whitespace() && *c != ',' && *c != '_' && *c != '\'')
+        .collect();
+    cleaned.parse::<i64>().ok()
+}
+
 fn int_drag(ui: &mut egui::Ui, v: &mut i64) -> egui::Response {
     ui.add(
         egui::DragValue::new(v)
             .custom_formatter(|n, _| (n as i64).to_string())
-            .custom_parser(|s| {
-                let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-                cleaned.parse::<i64>().ok().map(|i| i as f64)
-            }),
+            .custom_parser(|s| whole_number(s).map(|i| i as f64)),
     )
 }
 
@@ -1553,8 +1567,7 @@ mod whole_numbers_read_true {
     }
 
     fn typed(text: &str) -> Option<i64> {
-        let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-        cleaned.parse::<i64>().ok().map(|i| i as f64).map(|f| f as i64)
+        super::whole_number(text).map(|i| i as f64).map(|f| f as i64)
     }
 
     #[test]
@@ -1583,6 +1596,19 @@ mod whole_numbers_read_true {
         assert_eq!(typed("9223372036854775807"), Some(i64::MAX));
         assert_eq!(typed("-9223372036854775808"), Some(i64::MIN));
         assert_eq!(typed(" 42 "), Some(42));
+    }
+
+    /// Cat Paws prints these numbers with commas in its own cautions, so it has to
+    /// accept them back. egui's parser strips whitespace and nothing else, which left
+    /// `9` behind when the maximum was typed the way a person writes it.
+    #[test]
+    fn a_number_written_the_way_people_write_it_is_understood() {
+        assert_eq!(typed("9,223,372,036,854,775,807"), Some(i64::MAX));
+        assert_eq!(typed("-9,223,372,036,854,775,808"), Some(i64::MIN));
+        assert_eq!(typed("1,000"), Some(1000));
+        assert_eq!(typed("1 000 000"), Some(1_000_000), "spaces group numbers too");
+        assert_eq!(typed("1_000_000"), Some(1_000_000), "and underscores, as in code");
+        assert_eq!(typed("−42"), Some(-42), "the minus egui itself displays");
     }
 
     /// Anything that is not a whole number is refused rather than rounded into one.
