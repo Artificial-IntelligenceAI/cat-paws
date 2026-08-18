@@ -397,10 +397,14 @@ impl CatPaws {
                         self.mode = next;
                         Palette::new(self.mode).apply(ui.ctx());
                     }
-                    ui.checkbox(&mut self.show_wasm, "Show WebAssembly")
+                    // "Compiled code" is the plain phrase; "WebAssembly" is the technical
+                    // one and lives in the hover and the heading. It only earns this
+                    // label because it is now the real thing — it used to sit on the
+                    // step listing, which is not what runs.
+                    ui.checkbox(&mut self.show_wasm, "Show compiled code")
                         .on_hover_text(
-                            "What your program actually became. These are the real \
-                             instructions the browser runs, written out as text.",
+                            "What your program actually became: the WebAssembly the \
+                             browser runs, written out as text.",
                         );
                     ui.checkbox(&mut self.show_listing, "Show the steps")
                         .on_hover_text(
