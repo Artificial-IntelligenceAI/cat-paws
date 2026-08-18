@@ -1474,3 +1474,89 @@ mod advice_names_a_real_gesture {
         assert!(fix.contains("ADD NODE"), "it does not say where to find one: {fix}");
     }
 }
+
+/// The two backends must refuse the same graphs, not merely agree on the ones that run.
+///
+/// An audit of which errors a person can actually produce on the canvas turned this up:
+/// a `Set` node naming a variable that had been removed was *accepted* by the interpreter
+/// — its `SetVar` inserts on write, so the variable quietly came back — while the
+/// WebAssembly backend refused the same graph with `CP-NAME-01`. Agreement on outputs is
+/// worth nothing if the two disagree about what is a program at all.
+#[cfg(test)]
+mod both_backends_refuse_the_same_graphs {
+    use super::*;
+
+    fn codes(g: &Graph) -> (Vec<String>, Vec<String>) {
+        let one = compile(g)
+            .map(|_| Vec::new())
+            .unwrap_or_else(|d| d.iter().map(|x| x.code.render()).collect());
+        let other = wasm::emit(g)
+            .map(|_| Vec::new())
+            .unwrap_or_else(|d| d.iter().map(|x| x.code.render()).collect());
+        (one, other)
+    }
+
+    fn out(node: NodeId, index: usize) -> PinRef {
+        PinRef { node, side: Side::Out, index }
+    }
+    fn inp(node: NodeId, index: usize) -> PinRef {
+        PinRef { node, side: Side::In, index }
+    }
+
+    #[test]
+    fn writing_to_a_removed_variable_is_refused_by_both() {
+        let mut g = Graph::new();
+        let s = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let set = g.add_node(
+            NodeKind::SetVar { name: "gone".into(), ty: DataType::Int },
+            (200.0, 0.0),
+        );
+        let lit = g.add_node(NodeKind::LitInt(7), (0.0, 200.0));
+        g.connect(out(s, 0), inp(set, 0)).unwrap();
+        g.connect(out(lit, 0), inp(set, 1)).unwrap();
+
+        let (interpreted, compiled) = codes(&g);
+        assert_eq!(interpreted, compiled, "the two backends disagree about this graph");
+        assert!(interpreted.contains(&"CP-NAME-01".to_string()), "{interpreted:?}");
+    }
+
+    /// The exact sequence a person performs: make a variable, drop a Set node for it,
+    /// then remove the variable from the panel.
+    #[test]
+    fn removing_a_variable_a_set_node_uses_is_refused_by_both() {
+        let mut g = Graph::new();
+        g.declare_var("score".into(), DataType::Int);
+        let s = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let set = g.add_node(
+            NodeKind::SetVar { name: "score".into(), ty: DataType::Int },
+            (200.0, 0.0),
+        );
+        let lit = g.add_node(NodeKind::LitInt(1), (0.0, 200.0));
+        g.connect(out(s, 0), inp(set, 0)).unwrap();
+        g.connect(out(lit, 0), inp(set, 1)).unwrap();
+        assert_eq!(codes(&g), (vec![], vec![]), "it should compile before the removal");
+
+        g.vars.remove("score");
+        let (interpreted, compiled) = codes(&g);
+        assert_eq!(interpreted, compiled);
+        assert!(interpreted.contains(&"CP-NAME-01".to_string()));
+    }
+
+    /// Reading one was always refused by both; this holds that half in place.
+    #[test]
+    fn reading_a_removed_variable_is_refused_by_both() {
+        let mut g = Graph::new();
+        let s = g.add_node(NodeKind::EventStart, (0.0, 0.0));
+        let p = g.add_node(NodeKind::Print { ty: DataType::Int }, (200.0, 0.0));
+        let get = g.add_node(
+            NodeKind::GetVar { name: "gone".into(), ty: DataType::Int },
+            (0.0, 200.0),
+        );
+        g.connect(out(s, 0), inp(p, 0)).unwrap();
+        g.connect(out(get, 0), inp(p, 1)).unwrap();
+
+        let (interpreted, compiled) = codes(&g);
+        assert_eq!(interpreted, compiled);
+        assert!(interpreted.contains(&"CP-NAME-01".to_string()));
+    }
+}

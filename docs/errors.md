@@ -291,3 +291,36 @@ A test now makes every error happen and reads its advice back, forbidding any ge
 editor does not have — right-click, double-click, a context menu, a menu bar. It is written
 as a prohibition rather than a requirement on purpose: plenty of good advice names no
 gesture at all, because it is about the value rather than about clicking.
+
+## Which of these can you actually reach by building nodes?
+
+Audited exhaustively, because a correct error nobody can reach is dead weight, and one that
+is easy to reach deserves the best wording.
+
+**Seven can be produced on the canvas:**
+
+| code | how |
+|---|---|
+| `CP-FLOW-01` | delete the Event start |
+| `CP-FLOW-02` | drag out a second Event start |
+| `CP-WIRE-01` | place an `Add +` and compile — its pins are empty |
+| `CP-WIRE-02` | wire two `Add +` nodes into each other, which is what "x = x + 1" looks like drawn |
+| `CP-NAME-01` | press **remove** on a variable that `get`/`set` nodes still use |
+| `CP-MATH-01` | two big `Number` nodes into a `Multiply ×` |
+| `CP-MATH-02` | a `Number` left at 0 into the right side of a `Divide ÷` |
+
+**Four cannot**, and the proofs are worth keeping:
+
+- **`CP-FLOW-03`** (execution loop). A search over **959,564** reachable wiring states —
+  321,171 of which contain an execution cycle — reported it **zero** times. The highest
+  execution in-degree on any node, ever, was **1**. `connect` replaces the wire on an
+  occupied input, so closing a loop unplugs whatever fed the entry node and detaches the
+  cycle from the start, where the walk never reaches it.
+- **`CP-FLOW-04`** (Event start in a chain). `EventStart::inputs()` is empty, so there is
+  no pin to wire into. 456,759 states, no violations.
+- **`CP-FLOW-05`** and **`CP-WIRE-03`**. Both need an execution pin joined to a data pin,
+  which `can_connect` refuses while the wire is still being dragged.
+
+All four remain in the compiler as guards: each fires immediately if the graph is corrupted
+by other means, which the audit confirmed by forcing a bad link into a patched copy. They
+are not dead code so much as a fence at the edge of a cliff nobody can currently walk to.

@@ -337,6 +337,20 @@ impl<'a> Compiler<'a> {
                 self.emit_after(out(id, 0));
             }
             NodeKind::SetVar { ref name, ty } => {
+                // Writing to a variable that no longer exists is refused here as well as
+                // in the WebAssembly backend. It used to be accepted: the interpreter's
+                // `SetVar` inserts on write, so a Set node left over from a deleted
+                // variable quietly brought it back to life and the program ran — while
+                // the compiled path refused the same graph outright. Two implementations
+                // disagreeing is the one thing the oracle cannot survive.
+                if !self.graph.vars.contains_key(name) {
+                    self.diags.push(Diagnostic::at(
+                        NO_SUCH_VAR,
+                        id,
+                        format!("there is no variable called '{name}'"),
+                        "add it in the Variables panel, or pick a different one on this node",
+                    ));
+                }
                 let value = self.values.input_expr(id, 1, ty);
                 self.instrs.push(Instr::SetVar(name.clone(), value));
                 self.emit_after(out(id, 0));

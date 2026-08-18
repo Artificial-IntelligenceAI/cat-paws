@@ -308,11 +308,12 @@ impl<'a> Emitter<'a> {
             Expr::GetVar(name) => match self.locals.get(name) {
                 Some(index) => self.body.push(Instruction::LocalGet(*index)),
                 None => {
-                    self.diags.push(Diagnostic::global(
-                NO_SUCH_VAR,
-                        format!("there is no variable called '{name}'"),
-                        "add it in the Variables panel, or pick a different one on this node",
-                    ));
+                    // No diagnostic here: `Values::output_expr` already reported this
+                    // name, and every local comes from `graph.vars`, so a name it
+                    // accepted is always present. Reporting again listed the same
+                    // problem twice in the console — and made the two backends differ in
+                    // how many problems they found, which is the shape of a divergence
+                    // even when they agree the program is wrong.
                     self.body.push(Instruction::I32Const(0));
                 }
             },
