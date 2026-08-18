@@ -102,20 +102,25 @@ impl View {
 }
 
 /// What the pointer is in the middle of doing.
-#[derive(Clone, Copy, PartialEq)]
+// No longer `Copy`: dragging a group carries a list of nodes, which lives on the heap.
+#[derive(Clone, PartialEq)]
 pub enum Interaction {
     Idle,
     Panning,
     /// Moving a node. `grab` is the world-space offset from the node's origin to
     /// the pointer, so the node doesn't jump when the drag starts.
-    DragNode {
-        id: NodeId,
-        grab: Vec2,
+    DragNodes {
+        /// Every node being moved, each with its own offset from the pointer.
+        grabs: Vec<(NodeId, Vec2)>,
     },
     /// Pulling a wire out of a pin. `origin` may be an output (dragging
     /// forwards) or an input (dragging backwards) — the drop decides direction.
     DragWire {
         origin: PinRef,
+    },
+    /// Sweeping a box over empty canvas to select everything inside it.
+    Marquee {
+        start: Pos2,
     },
 }
 
@@ -247,6 +252,7 @@ impl CatPaws {
         self.draw_wires(&painter, rect, &palette);
         self.draw_pending_wire(&painter, rect, &palette, pointer, hovered_pin);
         self.draw_nodes(&painter, rect, &palette, hovered_pin, pointer);
+        self.draw_marquee(&painter, &palette, pointer);
 
         // The caution itself, once the pointer is on the icon. A tooltip rather than
         // something always on screen: it is a thing to look up, not a thing to read
@@ -409,7 +415,19 @@ impl CatPaws {
                         return;
                     }
                 }
-                self.selected = self.node_at(rect, p);
+                let shift = ui.input(|i| i.modifiers.shift);
+                match self.node_at(rect, p) {
+                    // Shift keeps what is already chosen and toggles this one, which is
+                    // how every other canvas behaves.
+                    Some(id) if shift => {
+                        if !self.selection.insert(id) {
+                            self.selection.remove(&id);
+                        }
+                    }
+                    Some(id) => self.select_only(id),
+                    None if shift => {}
+                    None => self.selection.clear(),
+                }
             }
         }
 
@@ -419,20 +437,30 @@ impl CatPaws {
                     if let Some(pin) = self.pin_at(rect, p) {
                         Interaction::DragWire { origin: pin }
                     } else if let Some(id) = self.node_at(rect, p) {
-                        self.selected = Some(id);
+                        // Grabbing a node that is already part of a group moves the
+                        // whole group; grabbing one outside it selects just that one.
+                        if !self.selection.contains(&id) {
+                            self.select_only(id);
+                        }
                         // Snapshot once, at the start of the move -- not on every
                         // frame the node is dragged across.
                         self.push_undo();
-                        let node_pos = self.graph.node(id).map(|n| n.pos).unwrap_or((0.0, 0.0));
                         let world = self.view.to_world(rect, p);
-                        Interaction::DragNode {
-                            id,
-                            grab: world - pos2(node_pos.0, node_pos.1),
-                        }
+                        // Each node keeps its own offset from the pointer, so the group
+                        // holds its shape exactly rather than drifting together.
+                        let grabs = self
+                            .selection
+                            .iter()
+                            .filter_map(|n| {
+                                let pos = self.graph.node(*n)?.pos;
+                                Some((*n, world - pos2(pos.0, pos.1)))
+                            })
+                            .collect();
+                        Interaction::DragNodes { grabs }
                     } else {
-                        // Left-dragging empty canvas does nothing; panning is
-                        // the right button's job.
-                        Interaction::Idle
+                        // Left-dragging empty canvas sweeps a selection box. Panning is
+                        // still the right button's job.
+                        Interaction::Marquee { start: p }
                     }
                 }
                 None => Interaction::Idle,
@@ -440,12 +468,15 @@ impl CatPaws {
         }
 
         if response.dragged() {
-            match self.interaction {
-                Interaction::DragNode { id, grab } => {
+            match &self.interaction {
+                Interaction::DragNodes { grabs } => {
                     if let Some(p) = response.interact_pointer_pos() {
-                        let world = self.view.to_world(rect, p) - grab;
-                        if let Some(node) = self.graph.node_mut(id) {
-                            node.pos = (world.x, world.y);
+                        let world = self.view.to_world(rect, p);
+                        for (id, grab) in grabs.clone() {
+                            let at = world - grab;
+                            if let Some(node) = self.graph.node_mut(id) {
+                                node.pos = (at.x, at.y);
+                            }
                         }
                     }
                 }
@@ -454,6 +485,25 @@ impl CatPaws {
         }
 
         if response.drag_stopped() {
+            if let Interaction::Marquee { start } = self.interaction {
+                if let Some(end) = pointer {
+                    let box_ = Rect::from_two_pos(start, end);
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    if !shift {
+                        self.selection.clear();
+                    }
+                    for node in self.graph.nodes() {
+                        // Touching counts, rather than fully containing: sweeping a box
+                        // that clips a node is a clear enough statement of intent, and
+                        // demanding full containment makes large nodes hard to catch.
+                        if node_rect(&self.view, rect, node.pos, &node.kind).intersects(box_) {
+                            self.selection.insert(node.id);
+                        }
+                    }
+                }
+                self.interaction = Interaction::Idle;
+                return;
+            }
             if let Interaction::DragWire { origin } = self.interaction {
                 // The drop target is decided at the release point.
                 if let Some(target) = pointer.and_then(|p| self.pin_at(rect, p)) {
@@ -494,9 +544,11 @@ impl CatPaws {
         if !typing
             && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
         {
-            if let Some(id) = self.selected.take() {
+            if !self.selection.is_empty() {
                 self.push_undo();
-                self.graph.remove_node(id);
+                for id in std::mem::take(&mut self.selection) {
+                    self.graph.remove_node(id);
+                }
                 self.mark_stale();
             }
         }
@@ -609,7 +661,7 @@ impl CatPaws {
                 continue;
             }
             let header_color = palette.category_color(node.kind.category());
-            let selected = self.selected == Some(node.id);
+            let selected = self.selection.contains(&node.id);
             let outline = if failing.contains(&node.id) {
                 Stroke::new(2.0, palette.error)
             } else if selected {
@@ -702,6 +754,24 @@ impl CatPaws {
         found
     }
 
+    /// The selection box, while it is being swept.
+    fn draw_marquee(&self, painter: &Painter, palette: &Palette, pointer: Option<Pos2>) {
+        let Interaction::Marquee { start } = self.interaction else {
+            return;
+        };
+        let Some(end) = pointer else { return };
+        let box_ = Rect::from_two_pos(start, end);
+        // Filled faintly as well as outlined: an outline alone against a grid is easy to
+        // lose track of, and the fill shows which side of the line a node is on.
+        painter.rect_filled(box_, 2.0, palette.selection.gamma_multiply(0.12));
+        painter.rect_stroke(
+            box_,
+            2.0,
+            Stroke::new(1.0, palette.selection),
+            egui::StrokeKind::Inside,
+        );
+    }
+
     fn draw_pins(
         &self,
         painter: &Painter,
@@ -786,7 +856,7 @@ impl CatPaws {
         painter.text(
             pos2(rect.min.x + 12.0, rect.max.y - 12.0),
             Align2::LEFT_BOTTOM,
-            "left-drag a node to move it  ·  right-drag to pan  ·  scroll to zoom  ·  drag a pin to wire  ·  alt-click a pin to cut  ·  delete removes a node",
+            "left-drag a node to move it  ·  drag the canvas to select several  ·  shift-click to add  ·  right-drag to pan  ·  scroll to zoom  ·  drag a pin to wire  ·  alt-click a pin to cut  ·  delete removes them",
             FontId::proportional(12.5),
             palette.text,
         );

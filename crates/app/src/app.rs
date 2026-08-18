@@ -22,7 +22,12 @@ pub struct CatPaws {
     pub graph: Graph,
     pub view: View,
     pub interaction: Interaction,
-    pub selected: Option<NodeId>,
+    /// Every node currently selected.
+    ///
+    /// A set rather than one id, so a marquee can pick up several. The inspector asks
+    /// for `selected_one`, which answers only when exactly one is chosen — editing a
+    /// value makes no sense for a group.
+    pub selection: std::collections::BTreeSet<NodeId>,
     pub mode: Mode,
 
     pub program: Option<Program>,
@@ -73,7 +78,7 @@ impl CatPaws {
             graph: sample_graph(),
             view: View::default(),
             interaction: Interaction::Idle,
-            selected: None,
+            selection: Default::default(),
             mode: Mode::Dark,
             program: None,
             wasm: None,
@@ -90,6 +95,23 @@ impl CatPaws {
             dragging_new: None,
             undo_stack: Vec::new(),
         }
+    }
+
+    /// The one selected node, when exactly one is.
+    ///
+    /// `None` for an empty selection *and* for a group: "edit this value" has no meaning
+    /// when several nodes are chosen, and silently editing whichever happened to be first
+    /// would be worse than offering nothing.
+    pub fn selected_one(&self) -> Option<NodeId> {
+        match self.selection.len() {
+            1 => self.selection.iter().next().copied(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn select_only(&mut self, id: NodeId) {
+        self.selection.clear();
+        self.selection.insert(id);
     }
 
     pub fn palette(&self) -> Palette {
@@ -123,9 +145,7 @@ impl CatPaws {
         self.graph = previous;
 
         // Whatever was selected or being dragged may no longer exist.
-        if self.selected.is_some_and(|id| self.graph.node(id).is_none()) {
-            self.selected = None;
-        }
+        self.selection.retain(|id| self.graph.node(*id).is_some());
         self.interaction = Interaction::Idle;
 
         self.program = None;
@@ -142,6 +162,11 @@ impl CatPaws {
         self.program = None;
         self.wasm = None;
         self.status = Status::Stale("graph changed — compile again".to_string());
+        // Every graph change passes through here, so this is the one place that can
+        // promise the selection never holds a node that no longer exists. Undo already
+        // did it; a set makes the guarantee worth centralising, since a ghost id would
+        // otherwise sit there until something tried to draw or delete it.
+        self.selection.retain(|id| self.graph.node(*id).is_some());
     }
 
     pub(crate) fn set_wire_error(&mut self, message: &str) {
@@ -219,7 +244,7 @@ impl CatPaws {
             .view
             .to_world(self.last_canvas, self.last_canvas.center());
         let id = self.graph.add_node(kind, (center.x - 98.0, center.y - 40.0));
-        self.selected = Some(id);
+        self.select_only(id);
         self.mark_stale();
     }
 
@@ -309,7 +334,7 @@ impl CatPaws {
                 let at = Self::dropped_position(&self.view, self.last_canvas, pointer);
                 self.push_undo();
                 let id = self.graph.add_node(kind, at);
-                self.selected = Some(id);
+                self.select_only(id);
                 self.mark_stale();
             }
         }
@@ -665,18 +690,40 @@ impl CatPaws {
 
     fn ui_inspector(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette();
-        let Some(id) = self.selected else {
+        let Some(id) = self.selected_one() else {
+            let n = self.selection.len();
             ui.label(
-                RichText::new("click a node to edit its value")
-                    .size(12.5)
-                    .color(palette.text_faint),
+                RichText::new(if n == 0 {
+                    "click a node to edit its value".to_string()
+                } else {
+                    format!("{n} nodes selected — drag to move them, or press Delete")
+                })
+                .size(12.5)
+                .color(palette.text_faint),
             );
+            if n > 1 && ui.button(format!("Delete {n} nodes")).clicked() {
+                self.push_undo();
+                for id in std::mem::take(&mut self.selection) {
+                    self.graph.remove_node(id);
+                }
+                self.mark_stale();
+            }
             return;
         };
         if self.graph.node(id).is_none() {
-            self.selected = None;
+            self.selection.clear();
             return;
         }
+
+        // A variable node holds no value of its own — what it shows belongs to the
+        // variable. Read the name out before the graph is borrowed mutably below, so the
+        // editor for it can come after.
+        let variable = match self.graph.kind_of(id) {
+            Some(NodeKind::GetVar { name, .. }) | Some(NodeKind::SetVar { name, .. }) => {
+                Some(name.clone())
+            }
+            _ => None,
+        };
 
         // Same story as the variable editors: snapshot before, keep only if an
         // edit actually starts. See `ui_variables`.
@@ -707,13 +754,44 @@ impl CatPaws {
                     };
                     edited = r.changed();
                 }
-                None => {
+                None if variable.is_none() => {
                     ui.label(
                         RichText::new("nothing to edit on this node")
                             .size(12.5)
                             .color(palette.text_faint),
                     );
                 }
+                None => {}
+            }
+        }
+
+        // Editing the variable's starting value here rather than only in the Variables
+        // panel: with a long list, finding the row that matches the node you are looking
+        // at is its own small chore.
+        if let Some(name) = &variable {
+            if let Some(decl) = self.graph.vars.get_mut(name) {
+                ui.horizontal(|ui| {
+                    ui.label("starts at");
+                    let (r, one_shot) = match &mut decl.initial {
+                        Value::Int(v) => (ui.add(egui::DragValue::new(v)), false),
+                        Value::Float(v) => (ui.add(egui::DragValue::new(v).speed(0.1)), false),
+                        Value::Bool(v) => (ui.checkbox(v, ""), true),
+                        Value::Str(v) => (ui.text_edit_singleline(v), false),
+                    };
+                    edit_began |= if one_shot {
+                        r.changed()
+                    } else {
+                        r.drag_started() || r.gained_focus()
+                    };
+                    edited |= r.changed();
+                });
+                ui.label(
+                    RichText::new(format!(
+                        "this is '{name}' itself — every node using it starts here"
+                    ))
+                    .size(12.0)
+                    .color(palette.text_faint),
+                );
             }
         }
 
@@ -727,7 +805,7 @@ impl CatPaws {
         if ui.button("Delete node").clicked() {
             self.push_undo();
             self.graph.remove_node(id);
-            self.selected = None;
+            self.selection.clear();
             self.mark_stale();
         }
     }
@@ -911,7 +989,7 @@ impl CatPaws {
                 });
 
                 if let Some(id) = jump_to {
-                    self.selected = Some(id);
+                    self.select_only(id);
                     self.centre_on(id);
                 }
             });
@@ -1087,13 +1165,13 @@ mod tests {
         let mut app = CatPaws::fresh();
         // Add a node (which selects it), then undo the addition.
         app.add_node(NodeKind::LitInt(7));
-        let added = app.selected.expect("adding a node selects it");
+        let added = app.selected_one().expect("adding a node selects it");
         assert!(app.graph.node(added).is_some());
 
         app.undo();
         assert!(app.graph.node(added).is_none());
         assert_eq!(
-            app.selected, None,
+            app.selected_one(), None,
             "selection must not dangle on a node undo removed"
         );
     }
@@ -1357,5 +1435,84 @@ mod copying_the_console {
     fn an_empty_console_copies_nothing() {
         let app = CatPaws::fresh();
         assert!(app.console_text().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod selecting_several {
+    use super::*;
+
+    fn three_nodes() -> CatPaws {
+        let mut app = CatPaws::fresh();
+        app.graph = Graph::new();
+        for (i, kind) in [NodeKind::LitInt(1), NodeKind::LitInt(2), NodeKind::LitInt(3)]
+            .into_iter()
+            .enumerate()
+        {
+            app.graph.add_node(kind, (i as f32 * 300.0, 0.0));
+        }
+        app
+    }
+
+    /// Editing a value is a question about one node. With several chosen there is no
+    /// answer, and silently editing whichever came first would be worse than none.
+    #[test]
+    fn a_value_is_only_editable_when_one_node_is_chosen() {
+        let mut app = three_nodes();
+        let ids = app.graph.node_ids();
+        app.select_only(ids[0]);
+        assert_eq!(app.selected_one(), Some(ids[0]));
+
+        app.selection.insert(ids[1]);
+        assert_eq!(app.selected_one(), None, "two chosen is not one");
+    }
+
+    #[test]
+    fn deleting_takes_the_whole_selection() {
+        let mut app = three_nodes();
+        let ids = app.graph.node_ids();
+        app.selection.extend([ids[0], ids[2]]);
+        app.push_undo();
+        for id in std::mem::take(&mut app.selection) {
+            app.graph.remove_node(id);
+        }
+        assert_eq!(app.graph.node_ids(), vec![ids[1]]);
+    }
+
+    /// A node that no longer exists must not stay selected — undo and delete both
+    /// remove nodes out from under it.
+    #[test]
+    fn a_deleted_node_does_not_stay_selected() {
+        let mut app = three_nodes();
+        let ids = app.graph.node_ids();
+        app.selection.extend(ids.clone());
+        app.graph.remove_node(ids[1]);
+        app.mark_stale();
+        assert!(!app.selection.contains(&ids[1]), "a ghost is still selected");
+        assert_eq!(app.selection.len(), 2);
+    }
+
+    /// A variable node carries no value of its own, so the inspector edits the
+    /// variable's — the same number the Variables panel shows.
+    #[test]
+    fn a_variable_node_offers_the_variables_own_value() {
+        let mut app = CatPaws::fresh();
+        app.graph = Graph::new();
+        app.graph.declare_var("score".into(), DataType::Int);
+        let id = app.graph.add_node(
+            NodeKind::GetVar { name: "score".into(), ty: DataType::Int },
+            (0.0, 0.0),
+        );
+        app.select_only(id);
+
+        // What the inspector reaches for.
+        let name = match app.graph.kind_of(id) {
+            Some(NodeKind::GetVar { name, .. }) | Some(NodeKind::SetVar { name, .. }) => {
+                Some(name.clone())
+            }
+            _ => None,
+        };
+        assert_eq!(name.as_deref(), Some("score"));
+        assert!(app.graph.vars.contains_key("score"), "it edits the variable itself");
     }
 }
