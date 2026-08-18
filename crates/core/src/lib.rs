@@ -1184,3 +1184,57 @@ mod wasm_text {
         assert!(wasm::text(b"not a wasm module at all").is_err());
     }
 }
+
+/// Declaring a variable that already exists must not throw its value away.
+#[cfg(test)]
+mod declare_keeps_the_value {
+    use super::*;
+
+    /// The bug as reported: a starting value typed into the panel silently became 0 the
+    /// moment a written program mentioning that variable was generated.
+    #[test]
+    fn generating_a_declare_leaves_an_existing_start_alone() {
+        let mut g = Graph::new();
+        g.declare_var("Health".into(), DataType::Int);
+        g.vars.get_mut("Health").unwrap().initial = Value::Int(i64::MAX);
+
+        written::generate(&mut g, "declare 'Health' = integer '20'").expect("should read");
+
+        assert_eq!(
+            g.vars["Health"].initial,
+            Value::Int(i64::MAX),
+            "declaring an existing variable wiped its starting value"
+        );
+    }
+
+    #[test]
+    fn a_variable_that_did_not_exist_still_gets_made() {
+        let mut g = Graph::new();
+        written::generate(&mut g, "declare 'fresh' = integer '7'").expect("should read");
+        assert!(g.vars.contains_key("fresh"));
+        assert_eq!(g.vars["fresh"].initial, Value::Int(0), "a new one starts at the default");
+    }
+
+    /// Changing the type is a different variable in all but name, so the old starting
+    /// value cannot be kept — it is not even the right kind of value any more.
+    #[test]
+    fn a_different_type_replaces_it() {
+        let mut g = Graph::new();
+        g.declare_var("x".into(), DataType::Int);
+        g.vars.get_mut("x").unwrap().initial = Value::Int(99);
+
+        written::generate(&mut g, "declare 'x' = string 'hello'").expect("should read");
+        assert_eq!(g.vars["x"].ty, DataType::Str);
+        assert_eq!(g.vars["x"].initial, Value::Str(String::new()));
+    }
+
+    /// `set` never touched it, and still must not.
+    #[test]
+    fn setting_leaves_the_start_alone_too() {
+        let mut g = Graph::new();
+        g.declare_var("n".into(), DataType::Int);
+        g.vars.get_mut("n").unwrap().initial = Value::Int(41);
+        written::generate(&mut g, "set 'n' = integer '5'").expect("should read");
+        assert_eq!(g.vars["n"].initial, Value::Int(41));
+    }
+}

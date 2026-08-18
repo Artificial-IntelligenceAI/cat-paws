@@ -612,7 +612,7 @@ impl CatPaws {
                 // keystroke: snapshot when a drag or a focus begins. A checkbox
                 // has no such session, so its single change is the whole edit.
                 let (r, one_shot) = match &mut decl.initial {
-                    Value::Int(v) => (ui.add(egui::DragValue::new(v)), false),
+                    Value::Int(v) => (int_drag(ui, v), false),
                     Value::Float(v) => (ui.add(egui::DragValue::new(v).speed(0.1)), false),
                     Value::Bool(v) => (ui.checkbox(v, ""), true),
                     Value::Str(v) => (ui.text_edit_singleline(v), false),
@@ -736,7 +736,7 @@ impl CatPaws {
             ui.label(RichText::new(node.kind.title()).strong());
 
             let widget = match &mut node.kind {
-                NodeKind::LitInt(v) => Some((ui.add(egui::DragValue::new(v)), false)),
+                NodeKind::LitInt(v) => Some((int_drag(ui, v), false)),
                 NodeKind::LitFloat(v) => {
                     Some((ui.add(egui::DragValue::new(v).speed(0.1)), false))
                 }
@@ -773,7 +773,7 @@ impl CatPaws {
                 ui.horizontal(|ui| {
                     ui.label("starts at");
                     let (r, one_shot) = match &mut decl.initial {
-                        Value::Int(v) => (ui.add(egui::DragValue::new(v)), false),
+                        Value::Int(v) => (int_drag(ui, v), false),
                         Value::Float(v) => (ui.add(egui::DragValue::new(v).speed(0.1)), false),
                         Value::Bool(v) => (ui.checkbox(v, ""), true),
                         Value::Str(v) => (ui.text_edit_singleline(v), false),
@@ -1385,6 +1385,29 @@ mod dragging_out_of_the_palette {
     }
 }
 
+
+/// A whole-number field that shows the number it actually holds.
+///
+/// `DragValue` carries every value as an `f64` internally, and an `f64` cannot hold every
+/// `i64`: 9,223,372,036,854,775,807 becomes 9,223,372,036,854,775,808 on the way through,
+/// so the field *displayed* one more than the variable contained. The stored value was
+/// always right — the cast back saturates — but a number that reads as one thing and is
+/// another is exactly what this language is trying not to do.
+///
+/// Both halves are fixed here. Formatting casts the `f64` back the same saturating way
+/// egui stores it, which recovers the exact integer; parsing reads the text as an `i64`
+/// first, so what someone types is what they get rather than the nearest `f64` to it.
+fn int_drag(ui: &mut egui::Ui, v: &mut i64) -> egui::Response {
+    ui.add(
+        egui::DragValue::new(v)
+            .custom_formatter(|n, _| (n as i64).to_string())
+            .custom_parser(|s| {
+                let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+                cleaned.parse::<i64>().ok().map(|i| i as f64)
+            }),
+    )
+}
+
 /// Monospace text you can select and copy.
 ///
 /// A run of `ui.label`s cannot be dragged across — each one is its own widget, so a
@@ -1514,5 +1537,59 @@ mod selecting_several {
         };
         assert_eq!(name.as_deref(), Some("score"));
         assert!(app.graph.vars.contains_key("score"), "it edits the variable itself");
+    }
+}
+
+#[cfg(test)]
+mod whole_numbers_read_true {
+    /// The formatter and parser `int_drag` installs, tested without a `Ui`.
+    ///
+    /// `DragValue` carries values as `f64`, and above 2^53 an `f64` cannot hold every
+    /// `i64`. The number stored was always right; the number *shown* was not.
+    fn shown(stored: i64) -> String {
+        // Exactly what the widget does: value out as f64, formatted by our formatter.
+        let as_f64 = stored as f64;
+        (as_f64 as i64).to_string()
+    }
+
+    fn typed(text: &str) -> Option<i64> {
+        let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        cleaned.parse::<i64>().ok().map(|i| i as f64).map(|f| f as i64)
+    }
+
+    #[test]
+    fn the_largest_whole_number_reads_as_itself() {
+        assert_eq!(shown(i64::MAX), "9223372036854775807");
+        assert_eq!(shown(i64::MIN), "-9223372036854775808");
+    }
+
+    /// The old behaviour, kept as a note: formatting the f64 directly is what showed a
+    /// number one larger than the one being held.
+    #[test]
+    fn formatting_the_float_directly_is_what_was_wrong() {
+        assert_eq!(format!("{:.0}", i64::MAX as f64), "9223372036854775808");
+        assert_ne!(format!("{:.0}", i64::MAX as f64), i64::MAX.to_string());
+    }
+
+    #[test]
+    fn ordinary_numbers_are_unaffected() {
+        for v in [0, 1, -1, 50, -9999, 1_000_000, 9_007_199_254_740_992] {
+            assert_eq!(shown(v), v.to_string(), "{v} did not survive");
+        }
+    }
+
+    #[test]
+    fn typing_a_whole_number_gives_that_number() {
+        assert_eq!(typed("9223372036854775807"), Some(i64::MAX));
+        assert_eq!(typed("-9223372036854775808"), Some(i64::MIN));
+        assert_eq!(typed(" 42 "), Some(42));
+    }
+
+    /// Anything that is not a whole number is refused rather than rounded into one.
+    #[test]
+    fn a_decimal_or_a_word_is_refused() {
+        assert_eq!(typed("1.5"), None);
+        assert_eq!(typed("banana"), None);
+        assert_eq!(typed("9223372036854775808"), None, "one past the top is not a whole number here");
     }
 }

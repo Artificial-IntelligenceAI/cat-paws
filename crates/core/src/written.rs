@@ -513,9 +513,17 @@ impl<'a> Builder<'a> {
         match stmt {
             Stmt::Declare { name, value, line } => {
                 let ty = self.type_of(value, *line)?;
-                self.graph.declare_var(name.clone(), ty);
-                if let Some(decl) = self.graph.vars.get_mut(name) {
-                    decl.initial = ty.default_value();
+                // A variable that already exists keeps the starting value it was given.
+                //
+                // `declare_var` inserts a fresh `VarDecl`, so calling it on a name
+                // already in the panel threw that value away: set 'Health' to something
+                // by hand, generate a program containing `declare 'Health' = …`, and the
+                // number silently became 0. The declaration says what type the variable
+                // is and adds a Set node that writes to it when the program reaches that
+                // point — it is not a claim about where the variable starts.
+                match self.graph.vars.get(name) {
+                    Some(existing) if existing.ty == ty => {}
+                    _ => self.graph.declare_var(name.clone(), ty),
                 }
                 let set = self.add(NodeKind::SetVar { name: name.clone(), ty }, COL);
                 let source = self.value(value, *line)?;
